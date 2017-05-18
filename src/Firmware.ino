@@ -4,8 +4,7 @@ OutputPin dirPinX(5);
 OutputPin stepPinX(4);
 OutputPin dirPinY(3);
 OutputPin stepPinY(2);
-#define minPulseTime 1
-#define delayUs __asm__("nop\n\t""nop\n\t""nop\n\t""nop\n\t");__asm__("nop\n\t""nop\n\t""nop\n\t""nop\n\t");__asm__("nop\n\t""nop\n\t""nop\n\t""nop\n\t");__asm__("nop\n\t""nop\n\t""nop\n\t""nop\n\t")
+
 long xPosition = 0;
 long yPosition = 0;
 
@@ -66,10 +65,6 @@ void updateMotion()
 
 void setup(){
     Serial.begin(115200);
-    // pinMode(4,OUTPUT);//pulsePin
-    // pinMode(5,OUTPUT);
-    // pinMode(2,OUTPUT);//pulsePin
-    // pinMode(3,OUTPUT);
     Timer1.initialize(500);
     Timer1.attachInterrupt(updateMotion);
     pinMode(7,OUTPUT);
@@ -226,7 +221,12 @@ void moveTo(long tx, long ty, bool precision) {
                 err += dx;
                 stepY(sy);
             }
-            delayMicroseconds(currentDuringTime);
+            if(currentDuringTime>1000){
+                delay((int)(currentDuringTime/1000));
+                delayMicroseconds(currentDuringTime%1000);
+            }else{
+                delayMicroseconds(currentDuringTime);
+            }
             
             //     delayUs;delayUs;
         }
@@ -247,7 +247,12 @@ void moveTo(long tx, long ty, bool precision) {
             if (dy!=0) { 
                 stepY(dy>0);
             }
-            delayMicroseconds(currentDuringTime);
+            if(currentDuringTime>1000){
+                delay((int)(currentDuringTime/1000));
+                delayMicroseconds(currentDuringTime%1000);
+            }else{
+                delayMicroseconds(currentDuringTime);
+            }
         }
     }
     isMoving = false;
