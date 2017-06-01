@@ -33,3 +33,4 @@
 .pioenvs/*
 .DS_Store
 *.bak
+.vscode/*
