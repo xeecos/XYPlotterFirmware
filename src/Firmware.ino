@@ -5,19 +5,12 @@ OutputPin stepPinX(4);
 OutputPin dirPinY(3);
 OutputPin stepPinY(2);
 
+
 long xPosition = 0;
 long yPosition = 0;
 
-long currentSpeed = 1000;
-long currentAcc = 1000;
+double pulsePerMM = 62.289;
 
-double pulsePerMM = 168.35;
-long feedRate = 1000;
-
-int xPulsePin = 10;
-int xDirPin = 11;
-int yPulsePin = 9;
-int yDirPin = 3;
 float curve_section = 0.5;
 bool isRelative = false;
 String gcode = "";
@@ -27,13 +20,15 @@ float targetY = 0.0;
 long count = 0;
 int motionDir = 1;
 long targetDuringTime = 200;
-long currentDuringTime = 0;
+long currentDuringTime = 2000;
 int motionAcc = 1;
 bool isMoving = false;
+
+
 void updateMotion()
 {
     if(isMoving){
-        if(motionDir>0&&currentDuringTime>10){
+        if(motionDir>0&&currentDuringTime>targetDuringTime){
             if(motionDir>150){
                 motionAcc = -1;
                 motionDir=150;
@@ -47,7 +42,7 @@ void updateMotion()
                 currentDuringTime = targetDuringTime;
                 motionDir = 0;
             }
-        }else if(motionDir<0&&currentDuringTime<5000){
+        }else if(motionDir<0&&currentDuringTime<50000){
             
             if(motionDir<-150){
                 motionAcc = -1;
@@ -70,6 +65,7 @@ void setup(){
     pinMode(7,OUTPUT);
     analogWrite(7,0);
     Serial.print("start\n");
+    
 }
 
 void loop(){
@@ -168,14 +164,14 @@ long toDistanceY(double y){
 void stepX(bool dir){
     dirPinX = dir;
     stepPinX = LOW;
-    delayMicroseconds(2);
+    delayMicroseconds(1);
     stepPinX = HIGH;
     xPosition+=dir?1:-1;
 }
 void stepY(bool dir){
     dirPinY = dir;
     stepPinY = LOW;
-    delayMicroseconds(2);
+    delayMicroseconds(1);
     stepPinY = HIGH;
     yPosition+=dir?1:-1;
 }
@@ -193,7 +189,7 @@ void moveTo(long tx, long ty, bool precision) {
     long y0 = yPosition;
     long x1 = tx;
     long y1 = ty;
-    currentDuringTime = max(targetDuringTime+2000,2000);
+    currentDuringTime = max(targetDuringTime+500,1000);
     motionDir = 1;
     motionAcc = 1;
     long dx,dy,sx,sy;
@@ -230,7 +226,6 @@ void moveTo(long tx, long ty, bool precision) {
             
             //     delayUs;delayUs;
         }
-        Serial.println(millis()-ttt);
     }else{
         motionDir = 1;
         while(true){
