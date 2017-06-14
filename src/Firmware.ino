@@ -1,15 +1,15 @@
 #include <DirectIO.h>
 #include <TimerOne.h>
-OutputPin dirPinX(5);
-OutputPin stepPinX(4);
-OutputPin dirPinY(3);
-OutputPin stepPinY(2);
+OutputPin dirPinX(4);
+OutputPin stepPinX(5);
+OutputPin dirPinY(2);
+OutputPin stepPinY(3);
 
 
 long xPosition = 0;
 long yPosition = 0;
 
-double pulsePerMM = 62.289;
+double pulsePerMM = 170.2722;
 
 float curve_section = 0.5;
 bool isRelative = false;
@@ -223,8 +223,6 @@ void moveTo(long tx, long ty, bool precision) {
             }else{
                 delayMicroseconds(currentDuringTime);
             }
-            
-            //     delayUs;delayUs;
         }
     }else{
         motionDir = 1;

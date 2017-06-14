@@ -34,3 +34,6 @@
 .DS_Store
 *.bak
 .vscode/*
+.pioenvs
+.piolibdeps
+.vscode
