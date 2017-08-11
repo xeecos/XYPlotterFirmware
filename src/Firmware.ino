@@ -122,8 +122,8 @@ void parseGCode()
                 {
                     targetDuringTime = (long)(50000 / getCommand('f'));
                 }
-                double x = hasCommand('x') ? getCommand('x') : 0;
-                double y = hasCommand('y') ? getCommand('y') : 0;
+                double x = hasCommand('x') ? round(getCommand('x')*100.0)/100.0 : 0;
+                double y = hasCommand('y') ? round(getCommand('y')*100.0)/100.0 : 0;
                 if (isRelative)
                 {
                     move(x * pulsePerMM, y * pulsePerMM, cmd);
