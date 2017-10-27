@@ -1,7 +1,9 @@
 #include <Arduino.h>
+#include <MeStepper.h>
 #define STATES_COUNT 128
-#define COMMANDS_COUNT 2
-#define PULSES_PER_MM 100
+#define COMMANDS_COUNT 3
+#define PULSES_PER_MM 200
+#define DEBUG true
 struct MotionState
 {
     bool dirX;
@@ -12,13 +14,16 @@ struct MotionState
     double dy;
     long tx;
     long ty;
-    uint8_t power;
-    uint8_t speed;
-    uint8_t accel;
 };
-
+struct CommandState
+{
+    uint8_t power = 20;
+    uint8_t speed = 20;
+    uint8_t accel = 20;
+};
 MotionState _states[STATES_COUNT];
 MotionState _state;
+CommandState _commState;
 uint8_t _statesIndex = 0;
 
 String commands[COMMANDS_COUNT];
@@ -43,12 +48,19 @@ uint16_t _currentAccel = 10;
 /**
  * Hardware Define
  * */
-uint8_t _powerPin = 5;
+uint8_t _powerPin = 10;
+MeStepper stepperX(SLOT_1);
+MeStepper stepperY(SLOT_2);
+
 void setup()
 {
     Serial.begin(115200);
     delay(1000);
     Serial.println("opened");
+    stepperX.setMicroStep(32);
+    stepperY.setMicroStep(32);
+    stepperX.enableOutputs();
+    stepperY.enableOutputs();
 }
 
 void loop()
@@ -88,8 +100,8 @@ void nextState()
     if (_statesIndex > 0)
     {
         _state = _states[0];
-        _targetDelays = 5000 / (1 + _state.speed * 49);
-        _currentAccel = _state.accel;
+        _targetDelays = 5000 / (1 + _commState.speed * 49);
+        _currentAccel = _commState.accel;
         for (int i = 0; i < _statesIndex - 1; i++)
         {
             _states[i] = _states[i + 1];
@@ -226,6 +238,11 @@ void parseCommand(String cmd)
         finishCommand();
         break;
     }
+    case 'e':
+    {
+        firePower(v[0]);
+        break;
+    }
     }
 }
 
@@ -240,20 +257,25 @@ int8_t commandsLength()
 }
 void setPower(uint8_t power)
 {
-    _states[_statesIndex].power = fmaxf(0.0, fminf(100.0, power));
+    _commState.power = fmaxf(0.0, fminf(100.0, power));
 }
 void setSpeed(uint8_t speed)
 {
-    _states[_statesIndex].speed = fmaxf(0.0, fminf(100.0, speed));
+    _commState.speed = fmaxf(0.0, fminf(100.0, speed));
 }
 void setAccel(uint8_t accel)
 {
-    _states[_statesIndex].accel = fmaxf(0.0, fminf(100.0, accel));
+    _commState.accel = fmaxf(0.0, fminf(100.0, accel));
+}
+void firePower(uint8_t power)
+{
+    pinMode(_powerPin, OUTPUT);
+    analogWrite(_powerPin, fmaxf(0.0, fminf(255.0, power)));
 }
 void openPower()
 {
     pinMode(_powerPin, OUTPUT);
-    analogWrite(_powerPin, _states[_statesIndex].power * 2.55);
+    analogWrite(_powerPin, _commState.power * 2.55);
 }
 void closePower()
 {
@@ -266,17 +288,23 @@ void closePower()
 #define NUM_STEPS 20
 bool positionToGo()
 {
-    long distX = xPositionToGo(_targetX);
-    long distY = yPositionToGo(_targetY);
+    long distX = xPositionToGo(_state.tx);
+    long distY = yPositionToGo(_state.ty);
 
     return (distX != 0 || distY != 0);
 }
 void step()
 {
-    _targetX = _state.tx;
-    _targetY = _state.ty;
-    long distX = xPositionToGo(_targetX);
-    long distY = yPositionToGo(_targetY);
+    long distX = xPositionToGo(_state.tx);
+    long distY = yPositionToGo(_state.ty);
+
+#ifdef DEBUG
+    String str = "position:";
+    str += _positionX;
+    str += ",";
+    str += _positionY;
+// Serial.println(str);
+#endif
     if (distX == 0 && distY == 0)
         return;
     _state.e2 = _state.err;
@@ -295,10 +323,12 @@ void step()
 void stepX(bool dir)
 {
     _positionX += dir ? 1 : -1;
+    stepperX.step(dir);
 }
 void stepY(bool dir)
 {
     _positionY += dir ? 1 : -1;
+    stepperY.step(dir);
 }
 void moveTo(long x, long y)
 {
@@ -421,8 +451,8 @@ void curveTo(long x1, long y1, long x2, long y2, long x3, long y3)
     double pre5 = 6.0 * subdiv_step3;
     double tmp1x = x0 - x1 * 2.0 + x2;
     double tmp1y = y0 - y1 * 2.0 + y2;
-    double tmp2x = (x1 - x2) * 3.0 - x1 + x3;
-    double tmp2y = (y1 - y2) * 3.0 - y1 + y3;
+    double tmp2x = (x1 - x2) * 3.0 - x0 + x3;
+    double tmp2y = (y1 - y2) * 3.0 - y0 + y3;
     double fx = x0;
     double fy = y0;
     double dfx = (x1 - x0) * pre1 + tmp1x * pre2 + tmp2x * subdiv_step3;
