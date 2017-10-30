@@ -2,14 +2,15 @@
 #include <MeStepper.h>
 #define STATES_COUNT 128
 #define COMMANDS_COUNT 3
-#define PULSES_PER_MM 200
-#define DEBUG true
+#define PULSES_PER_MM 50
+#define CURVE_SECTION 0.5
+#define NUM_STEPS 100
+// #define DEBUG true
 struct MotionState
 {
     bool dirX;
     bool dirY;
-    double e2;
-    double err;
+    long err;
     double dx;
     double dy;
     long tx;
@@ -57,10 +58,8 @@ void setup()
     Serial.begin(115200);
     delay(1000);
     Serial.println("opened");
-    stepperX.setMicroStep(32);
-    stepperY.setMicroStep(32);
-    stepperX.enableOutputs();
-    stepperY.enableOutputs();
+    stepperX.setMicroStep(16);
+    stepperY.setMicroStep(16);
 }
 
 void loop()
@@ -100,7 +99,7 @@ void nextState()
     if (_statesIndex > 0)
     {
         _state = _states[0];
-        _targetDelays = 5000 / (1 + _commState.speed * 49);
+        _targetDelays = 50000 / (1 + _commState.speed * 4);
         _currentAccel = _commState.accel;
         for (int i = 0; i < _statesIndex - 1; i++)
         {
@@ -243,6 +242,20 @@ void parseCommand(String cmd)
         firePower(v[0]);
         break;
     }
+    case 'o':
+    {
+        if (v[0] > 0)
+        {
+            stepperX.enableOutputs();
+            stepperY.enableOutputs();
+        }
+        else
+        {
+            stepperX.disableOutputs();
+            stepperY.disableOutputs();
+        }
+    }
+    break;
     }
 }
 
@@ -284,8 +297,6 @@ void closePower()
 /**
  * motion control
  */
-#define CURVE_SECTION 0.5
-#define NUM_STEPS 20
 bool positionToGo()
 {
     long distX = xPositionToGo(_state.tx);
@@ -297,23 +308,22 @@ void step()
 {
     long distX = xPositionToGo(_state.tx);
     long distY = yPositionToGo(_state.ty);
-
 #ifdef DEBUG
-    String str = "position:";
+    String str = "p:";
     str += _positionX;
     str += ",";
     str += _positionY;
-// Serial.println(str);
+    Serial.println(str);
 #endif
     if (distX == 0 && distY == 0)
         return;
-    _state.e2 = _state.err;
-    if (_state.e2 > -_state.dx)
+    long e2 = _state.err;
+    if (e2 > -_state.dx)
     {
         _state.err -= _state.dy;
         stepX(_state.dirX);
     }
-    if (_state.e2 < _state.dy)
+    if (e2 < _state.dy)
     {
         _state.err += _state.dx;
         stepY(_state.dirY);
@@ -376,7 +386,7 @@ void wait()
     }
     if (_currentDelays > 2000)
     {
-        delay(floorf(_currentDelays / 1000));
+        delay((int)(_currentDelays / 1000));
         delayMicroseconds(_currentDelays % 1000);
     }
     else
@@ -470,9 +480,9 @@ void curveTo(long x1, long y1, long x2, long y2, long x3, long y3)
         dfy += ddfy;
         ddfx += dddfx;
         ddfy += dddfy;
-        lineTo(fx, fy);
+        lineTo(floorf(fx * 100) / 100, floorf(fy * 100) / 100);
     }
-    lineTo(x3, y3);
+    lineTo(floorf(x3 * 100) / 100, floorf(y3 * 100) / 100);
 }
 void quadTo(long x1, long y1, long x2, long y2)
 {
