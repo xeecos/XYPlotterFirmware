@@ -26,7 +26,7 @@
  * \par Method List:
  *
  *    1. void MeStepper::setMicroStep(int8_t value);
- *    2. void MeStepper::setpin(int slot);
+ *    2. void MeStepper::setPin(int slot);
  *    3. void MeStepper::moveTo(long absolute);
  *    4. void MeStepper::moveTo(long absolute, cb callback, int extId);
  *    5. void MeStepper::move(long relative);
@@ -186,7 +186,7 @@ void MeStepper::setMicroStep(int8_t value)
 
 /**
  * \par Function
- *    setpin
+ *    setPin
  * \par Description
  *    Set pin for Stepper.
  * \param[in]
@@ -198,7 +198,7 @@ void MeStepper::setMicroStep(int8_t value)
  * \par Others
  *    None
  */
-void MeStepper::setpin(int slot)
+void MeStepper::setPin(int slot)
 {
     _currentPos = 0;
     _targetPos = 0;

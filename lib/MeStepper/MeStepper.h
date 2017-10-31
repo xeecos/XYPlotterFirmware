@@ -146,7 +146,7 @@ public:
  * \par Others
  *    None
  */
-  void setpin(int slot);
+  void setPin(int slot);
 
   /**
  * \par Function
