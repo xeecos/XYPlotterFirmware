@@ -5,6 +5,7 @@
 #define PULSES_PER_MM 50
 #define CURVE_SECTION 0.5
 #define NUM_STEPS 100
+#define NUM_AXIS 2
 // #define DEBUG true
 struct MotionState
 {
@@ -22,6 +23,17 @@ struct CommandState
     uint8_t speed = 20;
     uint8_t accel = 20;
 };
+struct PlannerPoint
+{
+};
+struct SystemStatus
+{
+    bool running = false;
+    long currentPosition[NUM_AXIS];
+    long targetPosition[NUM_AXIS];
+};
+SystemStatus _sys;
+PlannerPoint _points[STATES_COUNT];
 MotionState _states[STATES_COUNT];
 MotionState _state;
 CommandState _commState;
@@ -29,7 +41,7 @@ uint8_t _statesIndex = 0;
 
 String commands[COMMANDS_COUNT];
 int8_t _cmdsIndex = 0;
-
+uint8_t _plannedCount = 0;
 int8_t _power = 0;
 int16_t _speed = 0;
 int16_t _accel = 0;
@@ -70,6 +82,70 @@ void loop()
         parseBuffer(c);
     }
     run();
+}
+void calcPlanned()
+{
+}
+void shiftPlanned()
+{
+}
+void setRun()
+{
+    _sys.running = true;
+}
+void setStop()
+{
+    _sys.running = false;
+}
+uint8_t isRunningState()
+{
+    return 0;
+}
+void motionChanged()
+{
+    if (_plannedCount > 2)
+    {
+        calcPlanned();
+        setRun();
+    }
+    else
+    {
+        setStop();
+    }
+}
+void motionFinish()
+{
+
+    shiftPlanned();
+}
+void waitingPushPoint()
+{
+}
+void initTimer()
+{
+
+    cli();      // disable global interrupts
+    TCCR1A = 0; // set entire TCCR1A register to 0
+    TCCR1B = 0; // same for TCCR1B
+
+    // turn on CTC mode:
+    TCCR1B |= (1 << WGM12);
+    // Set CS10 bits for 1 prescaler:
+    TCCR1B |= (1 << CS10);
+    // enable timer compare interrupt:
+    TIMSK |= (1 << OCIE1A);
+    // enable global interrupts:
+    // set compare match register to desired timer count:
+    OCR1A = 797;
+    cli();
+    TCCR1B &= ~(1 << WGM13); // waveform generation = 0100 = CTC
+    TCCR1B |= (1 << WGM12);
+    TCCR1A &= ~((1 << WGM11) | (1 << WGM10));
+    TCCR1A &= ~((1 << COM1A1) | (1 << COM1A0) | (1 << COM1B1) | (1 << COM1B0)); // Disconnect OC1 output
+    sei();
+}
+ISR(TIMER1_COMPA_vect)
+{
 }
 void parseBuffer(char c)
 {
@@ -342,6 +418,7 @@ void stepY(bool dir)
 }
 void moveTo(long x, long y)
 {
+    waitingPushPoint();
     closePower();
     _startX = x;
     _startY = y;
@@ -356,6 +433,7 @@ void moveTo(long x, long y)
 }
 void lineTo(long x, long y)
 {
+    waitingPushPoint();
     openPower();
 #ifdef DEBUG
     String str = "line:";
