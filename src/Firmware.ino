@@ -1,77 +1,77 @@
-#include <DirectIO.h>
-#include <TimerOne.h>
-OutputPin dirPinX(4);
-OutputPin stepPinX(5);
-OutputPin dirPinY(2);
-OutputPin stepPinY(3);
-
-long xPosition = 0;
-long yPosition = 0;
-
-double pulsePerMM = (360 * 32 / 1.8) / 60; //106.90453618;
-
-float curve_section = 0.5;
-bool isRelative = false;
-String gcode = "";
-
-float targetX = 0.0;
-float targetY = 0.0;
-long count = 0;
-int motionDir = 1;
-long targetDuringTime = 200;
-long currentDuringTime = 2000;
-int motionAcc = 1;
-bool isMoving = false;
-
-void updateMotion()
+#include <Arduino.h>
+#include <MeStepper.h>
+#define STATES_COUNT 128
+#define COMMANDS_COUNT 3
+#define PULSES_PER_MM 50
+#define CURVE_SECTION 0.5
+#define NUM_STEPS 100
+#define NUM_AXIS 2
+// #define DEBUG true
+struct MotionState
 {
-    if (isMoving)
-    {
-        if (motionDir > 0 && currentDuringTime > targetDuringTime)
-        {
-            if (motionDir > 150)
-            {
-                motionAcc = -1;
-                motionDir = 150;
-            }
-            motionDir += motionAcc;
-            if (motionDir < 0)
-            {
-                motionDir = 0;
-            }
-            currentDuringTime -= motionDir;
-            if (currentDuringTime < targetDuringTime)
-            {
-                currentDuringTime = targetDuringTime;
-                motionDir = 0;
-            }
-        }
-        else if (motionDir < 0 && currentDuringTime < 50000)
-        {
+    bool dirX;
+    bool dirY;
+    long err;
+    double dx;
+    double dy;
+    long tx;
+    long ty;
+};
+struct CommandState
+{
+    uint8_t power = 20;
+    uint8_t speed = 20;
+    uint8_t accel = 20;
+};
+struct PlannerPoint
+{
+};
+struct SystemStatus
+{
+    bool running = false;
+    long currentPosition[NUM_AXIS];
+    long targetPosition[NUM_AXIS];
+};
+SystemStatus _sys;
+PlannerPoint _points[STATES_COUNT];
+MotionState _states[STATES_COUNT];
+MotionState _state;
+CommandState _commState;
+uint8_t _statesIndex = 0;
 
-            if (motionDir < -150)
-            {
-                motionAcc = -1;
-                motionDir = -150;
-            }
-            motionDir -= motionAcc;
-            if (motionDir > 0)
-            {
-                motionDir = 0;
-            }
-            currentDuringTime -= motionDir;
-        }
-    }
-}
+String commands[COMMANDS_COUNT];
+int8_t _cmdsIndex = 0;
+uint8_t _plannedCount = 0;
+int8_t _power = 0;
+int16_t _speed = 0;
+int16_t _accel = 0;
+long _positionX = 0;
+long _positionY = 0;
+long _targetX = 0;
+long _targetY = 0;
+long _startX = 0;
+long _startY = 0;
+long _lastX = 0;
+long _lastY = 0;
+bool _isFinish = true;
+String _buffer = "";
+uint16_t _currentDelays = 5000;
+uint16_t _targetDelays = 0;
+uint16_t _currentAccel = 10;
+/**
+ * Hardware Define
+ * */
+uint8_t _powerPin = 10;
+MeStepper stepperX(SLOT_1);
+MeStepper stepperY(SLOT_2);
 
 void setup()
 {
     Serial.begin(115200);
-    Timer1.initialize(500);
-    Timer1.attachInterrupt(updateMotion);
-    pinMode(7, OUTPUT);
-    analogWrite(7, 0);
-    Serial.print("start\n");
+    delay(1000);
+    Serial.println("opened");
+    stepperX.setMicroStep(16);
+    stepperY.setMicroStep(16);
 }
 
 void loop()
@@ -79,250 +79,528 @@ void loop()
     if (Serial.available())
     {
         char c = Serial.read();
-        if (c == '\n')
+        parseBuffer(c);
+    }
+    run();
+}
+void calcPlanned()
+{
+}
+void shiftPlanned()
+{
+}
+void setRun()
+{
+    _sys.running = true;
+}
+void setStop()
+{
+    _sys.running = false;
+}
+uint8_t isRunningState()
+{
+    return 0;
+}
+void motionChanged()
+{
+    if (_plannedCount > 2)
+    {
+        calcPlanned();
+        setRun();
+    }
+    else
+    {
+        setStop();
+    }
+}
+void motionFinish()
+{
+
+    shiftPlanned();
+}
+void waitingPushPoint()
+{
+}
+void initTimer()
+{
+
+    cli();      // disable global interrupts
+    TCCR1A = 0; // set entire TCCR1A register to 0
+    TCCR1B = 0; // same for TCCR1B
+
+    // turn on CTC mode:
+    TCCR1B |= (1 << WGM12);
+    // Set CS10 bits for 1 prescaler:
+    TCCR1B |= (1 << CS10);
+    // enable timer compare interrupt:
+    TIMSK |= (1 << OCIE1A);
+    // enable global interrupts:
+    // set compare match register to desired timer count:
+    OCR1A = 797;
+    cli();
+    TCCR1B &= ~(1 << WGM13); // waveform generation = 0100 = CTC
+    TCCR1B |= (1 << WGM12);
+    TCCR1A &= ~((1 << WGM11) | (1 << WGM10));
+    TCCR1A &= ~((1 << COM1A1) | (1 << COM1A0) | (1 << COM1B1) | (1 << COM1B0)); // Disconnect OC1 output
+    sei();
+}
+ISR(TIMER1_COMPA_vect)
+{
+}
+void parseBuffer(char c)
+{
+    if (c == '\n')
+    {
+        pushCommand(_buffer);
+        _buffer = "";
+    }
+    else
+    {
+        _buffer += c;
+    }
+}
+void run()
+{
+    if (positionToGo())
+    {
+        step();
+    }
+    else
+    {
+        nextState();
+    }
+}
+void nextState()
+{
+    if (_statesIndex > 0)
+    {
+        _state = _states[0];
+        _targetDelays = 50000 / (1 + _commState.speed * 4);
+        _currentAccel = _commState.accel;
+        for (int i = 0; i < _statesIndex - 1; i++)
         {
-            parseGCode();
-            gcode = "";
+            _states[i] = _states[i + 1];
+        }
+        _statesIndex--;
+    }
+    else
+    {
+        nextCommand();
+    }
+}
+void pushCommand(String cmd)
+{
+    commands[_cmdsIndex] = cmd;
+    _cmdsIndex++;
+}
+void nextCommand()
+{
+    if (_cmdsIndex > 0)
+    {
+        _isFinish = false;
+        String cmd = commands[0];
+        for (int i = 0; i < _cmdsIndex - 1; i++)
+        {
+            commands[i] = commands[i + 1];
+        }
+        _cmdsIndex--;
+        parseCommand(cmd);
+    }
+    else
+    {
+        if (!_isFinish)
+        {
+            _isFinish = true;
+            finishCommand();
         }
         else
         {
-            gcode += c;
+            if (_currentDelays < 5000)
+            {
+                _currentDelays += 10;
+            }
         }
     }
 }
-float getX()
+void parseCommand(String cmd)
 {
-    return xPosition / pulsePerMM;
-}
-float getY()
-{
-    return yPosition / pulsePerMM;
-}
-void parseGCode()
-{
-    gcode.toLowerCase();
-    char c;
-    int cmd, index, startIndex, endIndex;
-    float val;
-    if (gcode.length() > 2)
+    cmd.toLowerCase();
+    char code = cmd.charAt(0);
+    long x1, y1, x2, y2, x3, y3, x4, y4;
+    static double v[8];
+    String vStr = "";
+    uint8_t vIndex = 0;
+    uint8_t len = cmd.length();
+    for (int i = 1; i < len; i++)
     {
-        if (hasCommand('g'))
+        char c = cmd.charAt(i);
+        if (c == ' ' || c == ',')
         {
-            cmd = getCommand('g');
-            switch (cmd)
+            if (vIndex > 0)
             {
-            case 0:
-            case 1:
-            {
-                if (hasCommand('p'))
-                {
-                    analogWrite(7, getCommand('p'));
-                }
-                if (hasCommand('f'))
-                {
-                    targetDuringTime = (long)(50000 / getCommand('f'));
-                }
-                double x = hasCommand('x') ? round(getCommand('x')*100.0)/100.0 : 0;
-                double y = hasCommand('y') ? round(getCommand('y')*100.0)/100.0 : 0;
-                if (isRelative)
-                {
-                    move(x * pulsePerMM, y * pulsePerMM, cmd);
-                }
-                else
-                {
-                    moveTo(hasCommand('x') ? (x * pulsePerMM) : xPosition, hasCommand('y') ? (y * pulsePerMM) : yPosition, cmd);
-                    targetX = x;
-                    targetY = y;
-                }
+                v[vIndex - 1] = vStr.toDouble();
             }
-            break;
-            case 2:
-            case 3:
-            {
-                if (hasCommand('p'))
-                {
-                    analogWrite(7, getCommand('p'));
-                }
-                arc(cmd == 3);
-            }
-            break;
-            case 28:
-            {
-                xPosition = 0;
-                yPosition = 0;
-            }
-            break;
-            case 90:
-            {
-                isRelative = false;
-            }
-            break;
-            case 91:
-            {
-                isRelative = true;
-            }
-            break;
-            }
+            vStr = "";
+            vIndex++;
         }
-        else if (hasCommand('m'))
+        else
         {
-            cmd = getCommand('m');
-            switch (cmd)
+            vStr += c;
+            if (vIndex > 0 && i == len - 1)
             {
-            case 4:
-                if (hasCommand('p'))
-                {
-                    analogWrite(7, getCommand('p'));
-                }
-                else
-                {
-                    analogWrite(7, 0);
-                }
-                break;
+                v[vIndex - 1] = vStr.toDouble();
             }
         }
     }
-    else
+    switch (code)
     {
+    case 'm':
+    {
+        x1 = v[0] * PULSES_PER_MM;
+        y1 = v[1] * PULSES_PER_MM;
+        moveTo(x1, y1);
+        break;
     }
-    commandEnd();
-}
-void commandEnd()
-{
-    Serial.print("oMGok\n");
-}
-long toDistanceX(double x)
-{
-    return (x - xPosition);
-}
-long toDistanceY(double y)
-{
-    return (y - yPosition);
+    case 'l':
+    {
+        x1 = v[0] * PULSES_PER_MM;
+        y1 = v[1] * PULSES_PER_MM;
+        lineTo(x1, y1);
+        break;
+    }
+    case 'h':
+    {
+        x1 = v[0] * PULSES_PER_MM;
+        lineTo(x1, _lastY);
+        break;
+    }
+    case 'v':
+    {
+        y1 = v[0] * PULSES_PER_MM;
+        lineTo(_lastX, y1);
+        break;
+    }
+    case 'c':
+    {
+        x1 = v[0] * PULSES_PER_MM;
+        y1 = v[1] * PULSES_PER_MM;
+        x2 = v[2] * PULSES_PER_MM;
+        y2 = v[3] * PULSES_PER_MM;
+        x3 = v[4] * PULSES_PER_MM;
+        y3 = v[5] * PULSES_PER_MM;
+        curveTo(x1, y1, x2, y2, x3, y3);
+        break;
+    }
+    case 'q':
+    {
+        x1 = v[0] * PULSES_PER_MM;
+        y1 = v[1] * PULSES_PER_MM;
+        x2 = v[2] * PULSES_PER_MM;
+        y2 = v[3] * PULSES_PER_MM;
+        quadTo(x1, y1, x2, y2);
+        break;
+    }
+    case 'z':
+    {
+        lineTo(_startX, _startY);
+        break;
+    }
+    case 'p':
+    {
+        setPower(v[0]);
+        setSpeed(v[1]);
+        setAccel(v[2]);
+        finishCommand();
+        break;
+    }
+    case 'e':
+    {
+        firePower(v[0]);
+        break;
+    }
+    case 'o':
+    {
+        if (v[0] > 0)
+        {
+            stepperX.enableOutputs();
+            stepperY.enableOutputs();
+        }
+        else
+        {
+            stepperX.disableOutputs();
+            stepperY.disableOutputs();
+        }
+    }
+    break;
+    }
 }
 
+void finishCommand()
+{
+    Serial.print("ok:");
+    Serial.println(commandsLength());
+}
+int8_t commandsLength()
+{
+    return _cmdsIndex + 1;
+}
+void setPower(uint8_t power)
+{
+    _commState.power = fmaxf(0.0, fminf(100.0, power));
+}
+void setSpeed(uint8_t speed)
+{
+    _commState.speed = fmaxf(0.0, fminf(100.0, speed));
+}
+void setAccel(uint8_t accel)
+{
+    _commState.accel = fmaxf(0.0, fminf(100.0, accel));
+}
+void firePower(uint8_t power)
+{
+    pinMode(_powerPin, OUTPUT);
+    analogWrite(_powerPin, fmaxf(0.0, fminf(255.0, power)));
+}
+void openPower()
+{
+    pinMode(_powerPin, OUTPUT);
+    analogWrite(_powerPin, _commState.power * 2.55);
+}
+void closePower()
+{
+    analogWrite(_powerPin, 0);
+}
+/**
+ * motion control
+ */
+bool positionToGo()
+{
+    long distX = xPositionToGo(_state.tx);
+    long distY = yPositionToGo(_state.ty);
+
+    return (distX != 0 || distY != 0);
+}
+void step()
+{
+    long distX = xPositionToGo(_state.tx);
+    long distY = yPositionToGo(_state.ty);
+#ifdef DEBUG
+    String str = "p:";
+    str += _positionX;
+    str += ",";
+    str += _positionY;
+    Serial.println(str);
+#endif
+    if (distX == 0 && distY == 0)
+        return;
+    long e2 = _state.err;
+    if (e2 > -_state.dx)
+    {
+        _state.err -= _state.dy;
+        stepX(_state.dirX);
+    }
+    if (e2 < _state.dy)
+    {
+        _state.err += _state.dx;
+        stepY(_state.dirY);
+    }
+    wait();
+}
 void stepX(bool dir)
 {
-    dirPinX = dir;
-    stepPinX = LOW;
-    delayMicroseconds(1);
-    stepPinX = HIGH;
-    xPosition += dir ? 1 : -1;
+    _positionX += dir ? 1 : -1;
+    stepperX.step(dir);
 }
 void stepY(bool dir)
 {
-    dirPinY = dir;
-    stepPinY = LOW;
-    delayMicroseconds(1);
-    stepPinY = HIGH;
-    yPosition += dir ? 1 : -1;
+    _positionY += dir ? 1 : -1;
+    stepperY.step(dir);
 }
-
-void move(long dx, long dy, bool precision)
+void moveTo(long x, long y)
 {
-    long tx = xPosition + dx;
-    long ty = yPosition + dy;
-    moveTo(tx, ty, precision);
+    waitingPushPoint();
+    closePower();
+    _startX = x;
+    _startY = y;
+#ifdef DEBUG
+    String str = "move:";
+    str += x;
+    str += ",";
+    str += y;
+    Serial.println(str);
+#endif
+    linearInterpolation(_lastX, _lastY, x, y);
 }
-int errX = 1;
-int errY = 1;
-void moveTo(long tx, long ty, bool precision)
+void lineTo(long x, long y)
 {
-    isMoving = true;
-    long x0 = xPosition;
-    long y0 = yPosition;
-    long x1 = tx;
-    long y1 = ty;
-    currentDuringTime = max(targetDuringTime + 500, 1000);
-    motionDir = 1;
-    motionAcc = 1;
-    long dx, dy, sx, sy;
-    if (precision)
+    waitingPushPoint();
+    openPower();
+#ifdef DEBUG
+    String str = "line:";
+    str += x;
+    str += ",";
+    str += y;
+    Serial.println(str);
+#endif
+    linearInterpolation(_lastX, _lastY, x, y);
+}
+long xPositionToGo(long tx)
+{
+    return tx - _positionX;
+}
+long yPositionToGo(long ty)
+{
+    return ty - _positionY;
+}
+void wait()
+{
+    if (_currentDelays < _targetDelays)
     {
-        dx = abs(x1 - x0);
-        sx = x0 < x1;
-        dy = abs(y1 - y0);
-        sy = y0 < y1;
-        long err = (dx > dy ? dx : -dy) / 2, e2;
-        long ttt = millis();
-        while (true)
-        {
-            long distX = toDistanceX(x1);
-            long distY = toDistanceY(y1);
-            if (labs(distX) < 200 && labs(distY) < 200)
-            {
-                motionDir = -1;
-                motionAcc = 1;
-            }
-            if (distX == 0 && distY == 0)
-                break;
-            e2 = err;
-            if (e2 > -dx)
-            {
-                err -= dy;
-                stepX(sx);
-            }
-            if (e2 < dy)
-            {
-                err += dx;
-                stepY(sy);
-            }
-            if (currentDuringTime > 1000)
-            {
-                delay((int)(currentDuringTime / 1000));
-                delayMicroseconds(currentDuringTime % 1000);
-            }
-            else
-            {
-                delayMicroseconds(currentDuringTime);
-            }
-        }
+        _currentDelays += _currentAccel;
+    }
+    else if (_currentDelays > _targetDelays)
+    {
+        _currentDelays -= _currentAccel;
+    }
+    if (_currentDelays > 2000)
+    {
+        delay((int)(_currentDelays / 1000));
+        delayMicroseconds(_currentDelays % 1000);
     }
     else
     {
-        motionDir = 1;
-        while (true)
+        delayMicroseconds(_currentDelays);
+    }
+}
+void linearInterpolation(long x1, long y1, long x2, long y2)
+{
+#ifdef DEBUG
+    String str = "linear:";
+    str += x1;
+    str += ",";
+    str += y1;
+    str += " ";
+    str += x2;
+    str += ",";
+    str += y2;
+    Serial.println(str);
+#endif
+    MotionState newState;
+    newState.dx = abs(x2 - x1);
+    newState.dy = abs(y2 - y1);
+    newState.dirX = x1 < x2;
+    newState.dirY = y1 < y2;
+    newState.err = (newState.dx > newState.dy ? newState.dx : -newState.dy) / 2;
+    newState.tx = x2;
+    newState.ty = y2;
+    _lastX = x2;
+    _lastY = y2;
+    _targetX = _lastX;
+    _targetY = _lastY;
+    if (_statesIndex > STATES_COUNT - 1)
+    {
+        for (int i = 0; i < STATES_COUNT; i++)
         {
-            dx = toDistanceX(tx);
-            dy = toDistanceY(ty);
-            if (labs(dx) < 200 && labs(dy) < 200)
-            {
-                motionDir = -1;
-                motionAcc = 1;
-            }
-            if (dx == 0 && dy == 0)
-                break;
-            if (dx != 0)
-            {
-                stepX(dx > 0);
-            }
-            if (dy != 0)
-            {
-                stepY(dy > 0);
-            }
-            if (currentDuringTime > 1000)
-            {
-                delay((int)(currentDuringTime / 1000));
-                delayMicroseconds(currentDuringTime % 1000);
-            }
-            else
-            {
-                delayMicroseconds(currentDuringTime);
-            }
+            _states[i] = _states[i + 1];
         }
     }
-    isMoving = false;
+    _states[_statesIndex] = newState;
+    _statesIndex++;
 }
-void arc(bool ccw)
+void curveTo(long x1, long y1, long x2, long y2, long x3, long y3)
 {
-    float cx = isRelative ? (getX() + getCommand('i')) : getCommand('i');
-    float cy = isRelative ? (getY() + getCommand('j')) : getCommand('j');
-    float endX = isRelative ? (getX() + getCommand('x')) : getCommand('x');
-    float endY = isRelative ? (getY() + getCommand('y')) : getCommand('y');
-    float angleA, angleB, angle, radius, length, aX, aY, bX, bY;
-    aX = (getX() - cx);
-    aY = (getY() - cy);
-    bX = (endX - cx);
-    bY = (endY - cy);
+#ifdef DEBUG
+    String str = "curve:";
+    str += _lastX;
+    str += ",";
+    str += _lastY;
+    str += " ";
+    str += x1;
+    str += ",";
+    str += y1;
+    str += " ";
+    str += x2;
+    str += ",";
+    str += y2;
+    str += " ";
+    str += x3;
+    str += ",";
+    str += y3;
+    Serial.println(str);
+#endif
+    long x0 = _lastX;
+    long y0 = _lastY;
+    double subdiv_step = 1.0 / (NUM_STEPS + 1);
+    double subdiv_step2 = subdiv_step * subdiv_step;
+    double subdiv_step3 = subdiv_step * subdiv_step * subdiv_step;
+    double pre1 = 3.0 * subdiv_step;
+    double pre2 = 3.0 * subdiv_step2;
+    double pre4 = 6.0 * subdiv_step2;
+    double pre5 = 6.0 * subdiv_step3;
+    double tmp1x = x0 - x1 * 2.0 + x2;
+    double tmp1y = y0 - y1 * 2.0 + y2;
+    double tmp2x = (x1 - x2) * 3.0 - x0 + x3;
+    double tmp2y = (y1 - y2) * 3.0 - y0 + y3;
+    double fx = x0;
+    double fy = y0;
+    double dfx = (x1 - x0) * pre1 + tmp1x * pre2 + tmp2x * subdiv_step3;
+    double dfy = (y1 - y0) * pre1 + tmp1y * pre2 + tmp2y * subdiv_step3;
+    double ddfx = tmp1x * pre4 + tmp2x * pre5;
+    double ddfy = tmp1y * pre4 + tmp2y * pre5;
+    double dddfx = tmp2x * pre5;
+    double dddfy = tmp2y * pre5;
+    int step = NUM_STEPS;
+    while (step--)
+    {
+        fx += dfx;
+        fy += dfy;
+        dfx += ddfx;
+        dfy += ddfy;
+        ddfx += dddfx;
+        ddfy += dddfy;
+        lineTo(floorf(fx * 100) / 100, floorf(fy * 100) / 100);
+    }
+    lineTo(floorf(x3 * 100) / 100, floorf(y3 * 100) / 100);
+}
+void quadTo(long x1, long y1, long x2, long y2)
+{
+#ifdef DEBUG
+    String str = "quad:";
+    str += _lastX;
+    str += ",";
+    str += _lastY;
+    str += " ";
+    str += x1;
+    str += ",";
+    str += y1;
+    str += " ";
+    str += x2;
+    str += ",";
+    str += y2;
+    Serial.println(str);
+#endif
+    long x0 = _lastX;
+    long y0 = _lastY;
+    int step = NUM_STEPS;
+    double fx, fy;
+    for (int i = 0; i < step; i++)
+    {
+        float t = i / step;
+        float u = 1 - t;
+        fx = x0 * u * u + x1 * 2 * u * t + x2 * t * t;
+        fy = y0 * u * u + y1 * 2 * u * t + y2 * t * t;
+        lineTo(fx, fy);
+    }
+    lineTo(x2, y2);
+}
+
+void arc(long sx, long sy, long cx, long cy, long ex, long ey, bool ccw)
+{
+    double angleA, angleB, angle, radius, length, aX, aY, bX, bY;
+    aX = (sx - cx);
+    aY = (sy - cy);
+    bX = (ex - cx);
+    bY = (ey - cy);
     if (ccw)
     {
         angleA = atan2(aY, aX);
@@ -341,47 +619,11 @@ void arc(bool ccw)
     radius = sqrt(aX * aX + aY * aY);
     length = radius * angle;
     int steps, s, step;
-    steps = (int)ceil(length / curve_section);
+    steps = (int)ceil(length / CURVE_SECTION);
     for (s = 1; s <= steps; s++)
     {
         step = (ccw) ? s : (steps - s);
-        moveTo((cx + radius * cos(angleA + angle * ((float)step / steps))) * pulsePerMM, (cy + radius * sin(angleA + angle * ((float)step / steps))) * pulsePerMM, 1);
+        float t = step / steps;
+        lineTo(cx + radius * cos(angleA + angle * t), cy + radius * sin(angleA + angle * t));
     }
-}
-bool hasCommand(char cmd)
-{
-    int index = 0;
-    char c = 0;
-    while (c != cmd)
-    {
-        if (index >= gcode.length())
-        {
-            return false;
-        }
-        else
-        {
-            c = gcode.charAt(index);
-        }
-        index++;
-    }
-    return true;
-}
-double getCommand(char cmd)
-{
-    int index = gcode.indexOf(cmd);
-    int startIndex = gcode.indexOf(cmd) + 1;
-    char c = 0;
-    while (c != ' ')
-    {
-        index++;
-        if (index >= gcode.length())
-        {
-            break;
-        }
-        else
-        {
-            c = gcode.charAt(index);
-        }
-    }
-    return gcode.substring(startIndex, index).toDouble();
 }
