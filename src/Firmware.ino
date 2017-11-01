@@ -18,7 +18,7 @@ enum MOTION_STATE
 struct MotionState
 {
     uint8_t power = 0;
-    uint8_t speed = 1;
+    uint8_t speed = 100;
     uint8_t acceleration = 1;
     long targetPosition[NUM_AXIS];
 };
@@ -50,16 +50,17 @@ struct SystemStatus
     long targetPosition[NUM_AXIS];
     long startPosition[NUM_AXIS];
     long timerCount = 0;
-    long time = 6250;
-    long maxTime = 6250;
-    long minTime = 125;
+    long time = 2500;
+    long defaultTime = 2500;
+    long maxTime = 1250;
+    long minTime = 25;
     PlannerPoint points[POINTS_COUNT];
     MotionState states[STATES_COUNT];
     MotionState state;
     CommandState command;
     String commands[COMMANDS_COUNT];
     uint8_t power = 0;
-    uint8_t speed = 1;
+    uint8_t speed = 100;
     uint8_t acceleration = 1;
     uint8_t statesIndex = 0;
     uint8_t cmdsIndex = 0;
@@ -79,7 +80,7 @@ void setup()
     initTimer();
     for (int i = 0; i < NUM_AXIS; i++)
     {
-        steppers[i].setMicroStep(16);
+        steppers[i].setMicroStep(8);
         steppers[i].enableOutputs();
     }
     Serial.println("opened");
@@ -240,7 +241,8 @@ void moveTo(long x, long y)
 #endif
     _sys.startPosition[0] = x;
     _sys.startPosition[1] = y;
-    addMotion(0, x, y, _sys.acceleration);
+    _sys.time = _sys.defaultTime;
+    addMotion(x, y, 0, _sys.speed, _sys.acceleration);
 }
 void lineTo(long x, long y)
 {
@@ -250,15 +252,18 @@ void lineTo(long x, long y)
     str += x;
     str += ",";
     str += y;
+    str += ",";
+    str += _sys.speed;
     Serial.println(str);
 #endif
-    addMotion(_sys.power, x, y, _sys.acceleration);
+    addMotion(x, y, _sys.power, _sys.speed, _sys.acceleration);
 }
-void addMotion(long x, long y, uint8_t power, uint8_t accelaration)
+void addMotion(long x, long y, uint8_t power, uint8_t speed, uint8_t accelaration)
 {
     MotionState s;
     s.power = power;
     s.acceleration = accelaration;
+    s.speed = speed;
     s.targetPosition[0] = x;
     s.targetPosition[1] = y;
     if (_sys.statesIndex > STATES_COUNT - 1)
@@ -401,6 +406,8 @@ void motionFinish()
     shiftPlanned();
     calcPlanned();
     unlockTimer();
+    _sys.minTime = fmax(25, 25 / (_sys.points[0].speed / 100));
+    _sys.maxTime = fmin(_sys.defaultTime, _sys.defaultTime / (_sys.points[0].exitSpeed / 50));
 }
 void waitingPushPoint()
 {
@@ -410,7 +417,7 @@ void waitingPushPoint()
         {
             break;
         }
-        delay(1);
+        delay(5);
         // #ifdef DEBUG
         //         String str = "waiting:";
         //         str += _sys.statesIndex;
@@ -535,7 +542,7 @@ void stepX(bool dir)
     _sys.currentPosition[0] += dir ? 1 : -1;
     _sys.points[0].delta[0]--;
     _sys.points[0].totalCount--;
-    steppers[0].step(true);
+    steppers[0].step(dir);
 }
 void stepY(bool dir)
 {
@@ -573,7 +580,11 @@ void nextWait()
         {
             if (_sys.time > _sys.minTime)
             {
-                _sys.time -= 1;
+                _sys.time -= 5;
+                if (_sys.time < _sys.minTime)
+                {
+                    _sys.time = _sys.minTime;
+                }
             }
             break;
         }
@@ -581,7 +592,7 @@ void nextWait()
         {
             if (_sys.time < _sys.maxTime)
             {
-                _sys.time += 1;
+                _sys.time += 5;
             }
             break;
         }
