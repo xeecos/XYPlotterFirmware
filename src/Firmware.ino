@@ -3,18 +3,17 @@
 #define STATES_COUNT 6
 #define COMMANDS_COUNT 6
 #define POINTS_COUNT 6
-#define PULSES_PER_MM 50
+#define PULSES_PER_MM 100
 #define CURVE_SECTION 0.5
 #define NUM_STEPS 100
 #define NUM_AXIS 2
-#define DEBUG 1
+#define DEBUG true
 enum MOTION_STATE
 {
     MOTION_ACCELETING = 0,
     MOTION_DECELETING,
     MOTION_NORMAL
 };
-// #define DEBUG true
 struct MotionState
 {
     uint8_t power = 0;
@@ -52,7 +51,7 @@ struct SystemStatus
     long timerCount = 0;
     long time = 2500;
     long defaultTime = 2500;
-    long maxTime = 1250;
+    long maxTime = 2500;
     long minTime = 25;
     PlannerPoint points[POINTS_COUNT];
     MotionState states[STATES_COUNT];
@@ -80,8 +79,8 @@ void setup()
     initTimer();
     for (int i = 0; i < NUM_AXIS; i++)
     {
-        steppers[i].setMicroStep(8);
-        steppers[i].enableOutputs();
+        steppers[i].setMicroStep(16);
+        steppers[i].disableOutputs();
     }
     Serial.println("opened");
 }
@@ -107,11 +106,6 @@ void parseBuffer(char c)
     }
 }
 
-void pushCommand(String cmd)
-{
-    _sys.commands[_sys.cmdsIndex] = cmd;
-    _sys.cmdsIndex++;
-}
 void parseCommand(String cmd)
 {
     cmd.toLowerCase();
@@ -278,7 +272,7 @@ void addMotion(long x, long y, uint8_t power, uint8_t speed, uint8_t accelaratio
 }
 void finishCommand()
 {
-    if (commandsLength() < 2)
+    if (commandsLength() <= 1)
     {
         Serial.print("ok:");
         Serial.println(commandsLength());
@@ -357,7 +351,7 @@ void calcPlanned()
         long dist = sqrt(point.delta[0] * point.delta[0] + point.delta[1] * point.delta[1]) / 2;
         point.accelCount = point.totalCount - min(dist, 200);
         point.decelCount = min(dist, 200);
-        point.power = lastState.power;
+        point.power = currentState.power;
         point.err = (point.delta[0] > point.delta[1] ? point.delta[0] : -point.delta[1]) / 2;
         _sys.plannedIndex++;
         _sys.points[_sys.plannedIndex] = point;
@@ -406,8 +400,9 @@ void motionFinish()
     shiftPlanned();
     calcPlanned();
     unlockTimer();
-    _sys.minTime = fmax(25, 25 / (_sys.points[0].speed / 100));
-    _sys.maxTime = fmin(_sys.defaultTime, _sys.defaultTime / (_sys.points[0].exitSpeed / 50));
+    firePower(_sys.points[0].power);
+    _sys.minTime = fmax(25, 100.0 / (_sys.points[0].speed / 100.0));
+    _sys.maxTime = fmin(_sys.defaultTime, _sys.defaultTime / (_sys.points[0].exitSpeed / 50.0));
 }
 void waitingPushPoint()
 {
@@ -417,7 +412,7 @@ void waitingPushPoint()
         {
             break;
         }
-        delay(5);
+        delay(100);
         // #ifdef DEBUG
         //         String str = "waiting:";
         //         str += _sys.statesIndex;
@@ -440,29 +435,7 @@ void initTimer()
 
     unlockTimer(); // enable all interrupts
 }
-// float t = 625;
-// float dir = 1;
 int tt = 0;
-// ISR(TIMER1_COMPA_vect)
-// {
-//     steppers[0].step(1);
-//     if (tt % 2 == 0)
-//     {
-//         tt = 0;
-//         OCR1A = t;
-//         t += dir;
-//         if (t > 625)
-//         {
-
-//             dir = -1;
-//         }
-//         else if (t < 20)
-//         {
-//             dir = 0;
-//         }
-//     }
-//     tt++;
-// }
 ISR(TIMER1_COMPA_vect)
 {
     run();
@@ -474,31 +447,6 @@ void run()
         motionFinish();
     }
 }
-void nextState()
-{
-}
-void nextCommand()
-{
-    if (_sys.cmdsIndex > 0)
-    {
-        _sys.isFinish = false;
-        String cmd = _sys.commands[0];
-        for (int i = 0; i < _sys.cmdsIndex - 1; i++)
-        {
-            _sys.commands[i] = _sys.commands[i + 1];
-        }
-        _sys.cmdsIndex--;
-        parseCommand(cmd);
-    }
-    else
-    {
-        if (!_sys.isFinish)
-        {
-            _sys.isFinish = true;
-            finishCommand();
-        }
-    }
-}
 bool motionStep()
 {
     if (_sys.plannedIndex < 0)
@@ -507,13 +455,6 @@ bool motionStep()
     }
     long distX = _sys.points[0].delta[0];
     long distY = _sys.points[0].delta[1];
-    // #ifdef DEBUG
-    //     String str = "p:";
-    //     str += distX;
-    //     str += ",";
-    //     str += distY;
-    //     Serial.println(str);
-    // #endif
     if (distX <= 0 && distY <= 0)
         return false;
     long e2 = _sys.points[0].err;
@@ -532,13 +473,6 @@ bool motionStep()
 }
 void stepX(bool dir)
 {
-    // #ifdef DEBUG
-    //     String str = "tx:";
-    //     str += _sys.currentPosition[0];
-    //     str += " - ";
-    //     str += _sys.points[0].totalCount;
-    //     Serial.println(str);
-    // #endif
     _sys.currentPosition[0] += dir ? 1 : -1;
     _sys.points[0].delta[0]--;
     _sys.points[0].totalCount--;
@@ -546,13 +480,6 @@ void stepX(bool dir)
 }
 void stepY(bool dir)
 {
-    // #ifdef DEBUG
-    //     String str = "ty:";
-    //     str += _sys.currentPosition[1];
-    //     str += " - ";
-    //     str += _sys.points[0].totalCount;
-    //     Serial.println(str);
-    // #endif
     _sys.currentPosition[1] += dir ? 1 : -1;
     _sys.points[0].delta[1]--;
     _sys.points[0].totalCount--;
@@ -572,7 +499,7 @@ void nextWait()
     {
         _sys.isRunningState = MOTION_DECELETING;
     }
-    if (tt % 2 == 0)
+    if (tt % 4 == 0)
     {
         switch (_sys.isRunningState)
         {
@@ -580,7 +507,7 @@ void nextWait()
         {
             if (_sys.time > _sys.minTime)
             {
-                _sys.time -= 5;
+                _sys.time -= 25;
                 if (_sys.time < _sys.minTime)
                 {
                     _sys.time = _sys.minTime;
@@ -592,7 +519,7 @@ void nextWait()
         {
             if (_sys.time < _sys.maxTime)
             {
-                _sys.time += 5;
+                _sys.time += 25;
             }
             break;
         }
@@ -609,8 +536,8 @@ void nextWait()
 }
 void curveTo(long x1, long y1, long x2, long y2, long x3, long y3)
 {
-    long x0 = _sys.states[_sys.statesIndex - 1].targetPosition[0];
-    long y0 = _sys.states[_sys.statesIndex - 1].targetPosition[1];
+    long x0 = _sys.states[_sys.statesIndex].targetPosition[0];
+    long y0 = _sys.states[_sys.statesIndex].targetPosition[1];
     double subdiv_step = 1.0 / (NUM_STEPS + 1);
     double subdiv_step2 = subdiv_step * subdiv_step;
     double subdiv_step3 = subdiv_step * subdiv_step * subdiv_step;
