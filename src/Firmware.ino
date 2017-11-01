@@ -7,6 +7,7 @@
 #define CURVE_SECTION 0.5
 #define NUM_STEPS 100
 #define NUM_AXIS 2
+#define DEBUG 1
 enum MOTION_STATE
 {
     MOTION_ACCELETING = 0,
@@ -49,6 +50,9 @@ struct SystemStatus
     long targetPosition[NUM_AXIS];
     long startPosition[NUM_AXIS];
     long timerCount = 0;
+    long time = 6250;
+    long maxTime = 6250;
+    long minTime = 125;
     PlannerPoint points[POINTS_COUNT];
     MotionState states[STATES_COUNT];
     MotionState state;
@@ -59,32 +63,26 @@ struct SystemStatus
     uint8_t acceleration = 1;
     uint8_t statesIndex = 0;
     uint8_t cmdsIndex = 0;
-    uint8_t plannedIndex = 0;
+    int8_t plannedIndex = -1;
     uint8_t isRunningState = MOTION_ACCELETING;
     uint8_t powerPin = 10;
+    String buffer = "";
     bool isFinish = true;
 };
 SystemStatus _sys;
-
-String _buffer = "";
-
-/**
- * Hardware Define
- * */
-
-MeStepper steppers[NUM_AXIS];
+MeStepper steppers[NUM_AXIS] = {MeStepper(SLOT_1), MeStepper(SLOT_2)};
 
 void setup()
 {
     Serial.begin(115200);
     delay(1000);
     initTimer();
-    Serial.println("opened");
     for (int i = 0; i < NUM_AXIS; i++)
     {
-        steppers[i].setPin(i + 1);
         steppers[i].setMicroStep(16);
+        steppers[i].enableOutputs();
     }
+    Serial.println("opened");
 }
 
 void loop()
@@ -99,13 +97,19 @@ void parseBuffer(char c)
 {
     if (c == '\n')
     {
-        pushCommand(_buffer);
-        _buffer = "";
+        parseCommand(_sys.buffer);
+        _sys.buffer = "";
     }
     else
     {
-        _buffer += c;
+        _sys.buffer += c;
     }
+}
+
+void pushCommand(String cmd)
+{
+    _sys.commands[_sys.cmdsIndex] = cmd;
+    _sys.cmdsIndex++;
 }
 void parseCommand(String cmd)
 {
@@ -195,7 +199,6 @@ void parseCommand(String cmd)
         setPower(v[0]);
         setSpeed(v[1]);
         setAccel(v[2]);
-        finishCommand();
         break;
     }
     case 'e':
@@ -219,9 +222,10 @@ void parseCommand(String cmd)
                 steppers[i].disableOutputs();
             }
         }
+        break;
     }
-    break;
     }
+    finishCommand();
 }
 
 void moveTo(long x, long y)
@@ -269,12 +273,15 @@ void addMotion(long x, long y, uint8_t power, uint8_t accelaration)
 }
 void finishCommand()
 {
-    Serial.print("ok:");
-    Serial.println(commandsLength());
+    if (commandsLength() < 2)
+    {
+        Serial.print("ok:");
+        Serial.println(commandsLength());
+    }
 }
 int8_t commandsLength()
 {
-    return _sys.cmdsIndex + 1;
+    return _sys.plannedIndex + 1;
 }
 void setPower(uint8_t power)
 {
@@ -315,12 +322,16 @@ void shiftState()
     _sys.statesIndex--;
     if (_sys.statesIndex < 0)
     {
-        nextCommand();
+        if (!_sys.isFinish)
+        {
+            _sys.isFinish = true;
+            finishCommand();
+        }
     }
 }
 void calcPlanned()
 {
-    if (_sys.plannedIndex < 2)
+    if (_sys.plannedIndex < 2 && _sys.statesIndex > 0)
     {
         MotionState lastState = _sys.state;
         shiftState();
@@ -343,8 +354,8 @@ void calcPlanned()
         point.decelCount = min(dist, 200);
         point.power = lastState.power;
         point.err = (point.delta[0] > point.delta[1] ? point.delta[0] : -point.delta[1]) / 2;
-        _sys.points[_sys.plannedIndex] = point;
         _sys.plannedIndex++;
+        _sys.points[_sys.plannedIndex] = point;
     }
 }
 /**
@@ -355,19 +366,22 @@ void calcPlanned()
  * */
 void shiftPlanned()
 {
-    for (int i = 0; i < _sys.plannedIndex; i++)
+    if (_sys.plannedIndex > -1)
     {
-        _sys.points[i] = _sys.points[i + 1];
+        for (int i = 0; i < _sys.plannedIndex; i++)
+        {
+            _sys.points[i] = _sys.points[i + 1];
+        }
+        _sys.plannedIndex--;
     }
-    _sys.plannedIndex--;
 }
 void lockTimer()
 {
-    cli();
+    noInterrupts();
 }
 void unlockTimer()
 {
-    sei();
+    interrupts();
 }
 void setRun()
 {
@@ -390,26 +404,61 @@ void motionFinish()
 }
 void waitingPushPoint()
 {
-    while (_sys.statesIndex > 5)
+    while (true)
     {
+        if (_sys.statesIndex <= 5)
+        {
+            break;
+        }
+        delay(1);
+        // #ifdef DEBUG
+        //         String str = "waiting:";
+        //         str += _sys.statesIndex;
+        //         Serial.println(str);
+        // #endif
     }
 }
 void initTimer()
 {
-    cli();
-    TCCR1B &= ~(1 << WGM13); // waveform generation = 0100 = CTC
-    TCCR1B |= (1 << WGM12);
-    TCCR1A &= ~((1 << WGM11) | (1 << WGM10));
-    TCCR1A &= ~((1 << COM1A1) | (1 << COM1A0) | (1 << COM1B1) | (1 << COM1B0)); // Disconnect OC1 output
-    OCR1A = 797;
-    sei();
+    lockTimer(); // disable all interrupts
+    TCCR1A = 0;
+    TCCR1B = 0;
+    TCNT1 = 0;
+
+    OCR1A = _sys.time;      // compare match register 16MHz/256/1Hz
+    TCCR1B |= (1 << WGM12); // CTC mode
+    TCCR1B |= (1 << CS11);
+    // TCCR1B |= (1 << CS10);   // 64 prescaler
+    TIMSK1 |= (1 << OCIE1A); // enable timer compare interrupt
+
+    unlockTimer(); // enable all interrupts
 }
+// float t = 625;
+// float dir = 1;
+int tt = 0;
+// ISR(TIMER1_COMPA_vect)
+// {
+//     steppers[0].step(1);
+//     if (tt % 2 == 0)
+//     {
+//         tt = 0;
+//         OCR1A = t;
+//         t += dir;
+//         if (t > 625)
+//         {
+
+//             dir = -1;
+//         }
+//         else if (t < 20)
+//         {
+//             dir = 0;
+//         }
+//     }
+//     tt++;
+// }
 ISR(TIMER1_COMPA_vect)
 {
-    if (_sys.running)
-    {
-        run();
-    }
+    run();
 }
 void run()
 {
@@ -420,11 +469,6 @@ void run()
 }
 void nextState()
 {
-}
-void pushCommand(String cmd)
-{
-    _sys.commands[_sys.cmdsIndex] = cmd;
-    _sys.cmdsIndex++;
 }
 void nextCommand()
 {
@@ -450,15 +494,19 @@ void nextCommand()
 }
 bool motionStep()
 {
+    if (_sys.plannedIndex < 0)
+    {
+        return false;
+    }
     long distX = _sys.points[0].delta[0];
     long distY = _sys.points[0].delta[1];
-#ifdef DEBUG
-    String str = "p:";
-    str += distX;
-    str += ",";
-    str += distY;
-    Serial.println(str);
-#endif
+    // #ifdef DEBUG
+    //     String str = "p:";
+    //     str += distX;
+    //     str += ",";
+    //     str += distY;
+    //     Serial.println(str);
+    // #endif
     if (distX <= 0 && distY <= 0)
         return false;
     long e2 = _sys.points[0].err;
@@ -470,20 +518,34 @@ bool motionStep()
     if (e2 < _sys.points[0].delta[1])
     {
         _sys.points[0].err += _sys.points[0].delta[0];
-        stepY(_sys.points[0].delta[1]);
+        stepY(_sys.points[0].dir[1]);
     }
     nextWait();
     return true;
 }
 void stepX(bool dir)
 {
+    // #ifdef DEBUG
+    //     String str = "tx:";
+    //     str += _sys.currentPosition[0];
+    //     str += " - ";
+    //     str += _sys.points[0].totalCount;
+    //     Serial.println(str);
+    // #endif
     _sys.currentPosition[0] += dir ? 1 : -1;
     _sys.points[0].delta[0]--;
     _sys.points[0].totalCount--;
-    steppers[0].step(dir);
+    steppers[0].step(true);
 }
 void stepY(bool dir)
 {
+    // #ifdef DEBUG
+    //     String str = "ty:";
+    //     str += _sys.currentPosition[1];
+    //     str += " - ";
+    //     str += _sys.points[0].totalCount;
+    //     Serial.println(str);
+    // #endif
     _sys.currentPosition[1] += dir ? 1 : -1;
     _sys.points[0].delta[1]--;
     _sys.points[0].totalCount--;
@@ -503,46 +565,39 @@ void nextWait()
     {
         _sys.isRunningState = MOTION_DECELETING;
     }
-    switch (_sys.isRunningState)
+    if (tt % 2 == 0)
     {
-    case MOTION_ACCELETING:
-    {
-        OCR1A;
-        break;
+        switch (_sys.isRunningState)
+        {
+        case MOTION_ACCELETING:
+        {
+            if (_sys.time > _sys.minTime)
+            {
+                _sys.time -= 1;
+            }
+            break;
+        }
+        case MOTION_DECELETING:
+        {
+            if (_sys.time < _sys.maxTime)
+            {
+                _sys.time += 1;
+            }
+            break;
+        }
+        case MOTION_NORMAL:
+        {
+            // OCR1A;
+            break;
+        }
+        }
+        tt = 0;
+        OCR1A = _sys.time;
     }
-    case MOTION_DECELETING:
-    {
-        OCR1A;
-        break;
-    }
-    case MOTION_NORMAL:
-    {
-        OCR1A;
-        break;
-    }
-    }
+    tt++;
 }
 void curveTo(long x1, long y1, long x2, long y2, long x3, long y3)
 {
-#ifdef DEBUG
-    String str = "curve:";
-    str += _lastX;
-    str += ",";
-    str += _lastY;
-    str += " ";
-    str += x1;
-    str += ",";
-    str += y1;
-    str += " ";
-    str += x2;
-    str += ",";
-    str += y2;
-    str += " ";
-    str += x3;
-    str += ",";
-    str += y3;
-    Serial.println(str);
-#endif
     long x0 = _sys.states[_sys.statesIndex - 1].targetPosition[0];
     long y0 = _sys.states[_sys.statesIndex - 1].targetPosition[1];
     double subdiv_step = 1.0 / (NUM_STEPS + 1);
@@ -565,6 +620,25 @@ void curveTo(long x1, long y1, long x2, long y2, long x3, long y3)
     double dddfx = tmp2x * pre5;
     double dddfy = tmp2y * pre5;
     int step = NUM_STEPS;
+#ifdef DEBUG
+    String str = "curve:";
+    str += x0;
+    str += ",";
+    str += y0;
+    str += " ";
+    str += x1;
+    str += ",";
+    str += y1;
+    str += " ";
+    str += x2;
+    str += ",";
+    str += y2;
+    str += " ";
+    str += x3;
+    str += ",";
+    str += y3;
+    Serial.println(str);
+#endif
     while (step--)
     {
         fx += dfx;
@@ -581,9 +655,6 @@ void quadTo(long x1, long y1, long x2, long y2)
 {
 #ifdef DEBUG
     String str = "quad:";
-    str += _lastX;
-    str += ",";
-    str += _lastY;
     str += " ";
     str += x1;
     str += ",";
