@@ -49,8 +49,8 @@ struct SystemStatus
     long targetPosition[NUM_AXIS];
     long startPosition[NUM_AXIS];
     long timerCount = 0;
-    long time = 1250;
-    long defaultTime = 1250;
+    long time = 625;
+    long defaultTime = 625;
     long defaultAcceleration = 25;
     long defaultAccelCount = 50;
     long defaultDecelCount = 50;
@@ -267,7 +267,7 @@ void addMotion(long x, long y, uint8_t power, uint8_t speed, uint8_t accelaratio
     s.targetPosition[1] = y;
     if (_sys.statesLength >= STATES_COUNT)
     {
-        shiftState();
+        waitingPushPoint();
     }
     _sys.states[_sys.statesLength] = s;
     _sys.statesIndex++;
