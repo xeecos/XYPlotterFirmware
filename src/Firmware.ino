@@ -11,8 +11,8 @@
 enum MOTION_STATE
 {
     MOTION_ACCELETING = 0,
-    MOTION_DECELETING,
-    MOTION_NORMAL
+    MOTION_NORMAL = 1,
+    MOTION_DECELETING = 2
 };
 struct MotionState
 {
@@ -36,10 +36,10 @@ struct PlannerPoint
     long decelCount = 0;
     long targetCount[NUM_AXIS];
     long totalCount = 0;
-    uint8_t enterSpeed = 0;
-    uint8_t speed = 0;
-    uint8_t exitSpeed = 0;
-    uint8_t acceleration = 0;
+    uint8_t enterSpeed = 1;
+    uint8_t speed = 1;
+    uint8_t exitSpeed = 1;
+    uint8_t acceleration = 1;
     uint8_t power = 0;
 };
 struct SystemStatus
@@ -49,9 +49,12 @@ struct SystemStatus
     long targetPosition[NUM_AXIS];
     long startPosition[NUM_AXIS];
     long timerCount = 0;
-    long time = 2500;
-    long defaultTime = 2500;
-    long maxTime = 2500;
+    long time = 1250;
+    long defaultTime = 1250;
+    long defaultAcceleration = 25;
+    long defaultAccelCount = 50;
+    long defaultDecelCount = 50;
+    long maxTime = 1250;
     long minTime = 25;
     PlannerPoint points[POINTS_COUNT];
     MotionState states[STATES_COUNT];
@@ -59,11 +62,13 @@ struct SystemStatus
     CommandState command;
     String commands[COMMANDS_COUNT];
     uint8_t power = 0;
+    uint8_t defaultSpeed = 1;
     uint8_t speed = 100;
     uint8_t acceleration = 1;
     uint8_t statesIndex = 0;
-    uint8_t cmdsIndex = 0;
-    int8_t plannedIndex = -1;
+    uint8_t statesLength = 0;
+    uint8_t plannedIndex = 0;
+    uint8_t plannedLength = 0;
     uint8_t isRunningState = MOTION_ACCELETING;
     uint8_t powerPin = 10;
     String buffer = "";
@@ -155,13 +160,13 @@ void parseCommand(String cmd)
     case 'h':
     {
         x1 = v[0] * PULSES_PER_MM;
-        lineTo(x1, _sys.states[_sys.statesIndex - 1].targetPosition[1]);
+        lineTo(x1, _sys.states[_sys.statesLength - 1].targetPosition[1]);
         break;
     }
     case 'v':
     {
         y1 = v[0] * PULSES_PER_MM;
-        lineTo(_sys.states[_sys.statesIndex - 1].targetPosition[0], y1);
+        lineTo(_sys.states[_sys.statesLength - 1].targetPosition[0], y1);
         break;
     }
     case 'c':
@@ -241,15 +246,15 @@ void moveTo(long x, long y)
 void lineTo(long x, long y)
 {
     waitingPushPoint();
-#ifdef DEBUG
-    String str = "line:";
-    str += x;
-    str += ",";
-    str += y;
-    str += ",";
-    str += _sys.speed;
-    Serial.println(str);
-#endif
+    // #ifdef DEBUG
+    //     String str = "line:";
+    //     str += x;
+    //     str += ",";
+    //     str += y;
+    //     str += ",";
+    //     str += _sys.speed;
+    //     Serial.println(str);
+    // #endif
     addMotion(x, y, _sys.power, _sys.speed, _sys.acceleration);
 }
 void addMotion(long x, long y, uint8_t power, uint8_t speed, uint8_t accelaration)
@@ -260,19 +265,17 @@ void addMotion(long x, long y, uint8_t power, uint8_t speed, uint8_t accelaratio
     s.speed = speed;
     s.targetPosition[0] = x;
     s.targetPosition[1] = y;
-    if (_sys.statesIndex > STATES_COUNT - 1)
+    if (_sys.statesLength >= STATES_COUNT)
     {
-        for (int i = 0; i < STATES_COUNT; i++)
-        {
-            _sys.states[i] = _sys.states[i + 1];
-        }
+        shiftState();
     }
-    _sys.states[_sys.statesIndex] = s;
+    _sys.states[_sys.statesLength] = s;
     _sys.statesIndex++;
+    _sys.statesLength++;
 }
 void finishCommand()
 {
-    if (commandsLength() <= 1)
+    if (commandsLength() < 2)
     {
         Serial.print("ok:");
         Serial.println(commandsLength());
@@ -280,7 +283,7 @@ void finishCommand()
 }
 int8_t commandsLength()
 {
-    return _sys.plannedIndex + 1;
+    return _sys.plannedLength;
 }
 void setPower(uint8_t power)
 {
@@ -314,12 +317,13 @@ void closePower()
 void shiftState()
 {
     _sys.state = _sys.states[0];
-    for (int i = 0; i < _sys.statesIndex - 1; i++)
+    for (int i = 0; i < _sys.statesLength - 1; i++)
     {
         _sys.states[i] = _sys.states[i + 1];
     }
     _sys.statesIndex--;
-    if (_sys.statesIndex < 0)
+    _sys.statesLength--;
+    if (_sys.statesLength <= 0)
     {
         if (!_sys.isFinish)
         {
@@ -330,31 +334,31 @@ void shiftState()
 }
 void calcPlanned()
 {
-    if (_sys.plannedIndex < 2 && _sys.statesIndex > 0)
+    if (_sys.plannedLength < 2 && _sys.statesLength > 1)
     {
-        MotionState lastState = _sys.state;
-        shiftState();
         MotionState currentState = _sys.state;
+        shiftState();
+        MotionState nextState = _sys.state;
         PlannerPoint point;
-        //calc
-        point.dir[0] = lastState.targetPosition[0] < currentState.targetPosition[0];
-        point.dir[1] = lastState.targetPosition[1] < currentState.targetPosition[1];
-        point.targetCount[0] = abs(currentState.targetPosition[0] - lastState.targetPosition[0]);
-        point.targetCount[1] = abs(currentState.targetPosition[1] - lastState.targetPosition[1]);
+        point.dir[0] = currentState.targetPosition[0] < nextState.targetPosition[0];
+        point.dir[1] = currentState.targetPosition[1] < nextState.targetPosition[1];
+        point.targetCount[0] = abs(nextState.targetPosition[0] - currentState.targetPosition[0]);
+        point.targetCount[1] = abs(nextState.targetPosition[1] - currentState.targetPosition[1]);
         point.delta[0] = abs(point.targetCount[0]);
         point.delta[1] = abs(point.targetCount[1]);
         point.totalCount = point.delta[0] + point.delta[1];
-        point.enterSpeed = _sys.plannedIndex > 0 ? _sys.points[_sys.plannedIndex - 1].exitSpeed : _sys.speed;
-        point.speed = lastState.speed;
-        point.exitSpeed = sqrt(currentState.speed);
-        point.acceleration = lastState.acceleration;
+        point.enterSpeed = _sys.plannedIndex > 0 ? _sys.points[_sys.plannedIndex - 1].exitSpeed : _sys.defaultSpeed;
+        point.speed = fmax(1, currentState.speed);
+        point.exitSpeed = fmax(1, sqrt(nextState.speed));
+        point.acceleration = currentState.acceleration;
         long dist = sqrt(point.delta[0] * point.delta[0] + point.delta[1] * point.delta[1]) / 2;
-        point.accelCount = point.totalCount - min(dist, 200);
-        point.decelCount = min(dist, 200);
-        point.power = currentState.power;
+        point.accelCount = point.totalCount - min(dist, _sys.defaultAccelCount);
+        point.decelCount = min(dist, _sys.defaultDecelCount);
+        point.power = nextState.power;
         point.err = (point.delta[0] > point.delta[1] ? point.delta[0] : -point.delta[1]) / 2;
-        _sys.plannedIndex++;
         _sys.points[_sys.plannedIndex] = point;
+        _sys.plannedIndex++;
+        _sys.plannedLength++;
     }
 }
 /**
@@ -365,13 +369,14 @@ void calcPlanned()
  * */
 void shiftPlanned()
 {
-    if (_sys.plannedIndex > -1)
+    if (_sys.plannedIndex > 0)
     {
         for (int i = 0; i < _sys.plannedIndex; i++)
         {
             _sys.points[i] = _sys.points[i + 1];
         }
         _sys.plannedIndex--;
+        _sys.plannedLength--;
     }
 }
 void lockTimer()
@@ -400,19 +405,28 @@ void motionFinish()
     shiftPlanned();
     calcPlanned();
     unlockTimer();
-    firePower(_sys.points[0].power);
-    _sys.minTime = fmax(25, 100.0 / (_sys.points[0].speed / 100.0));
-    _sys.maxTime = fmin(_sys.defaultTime, _sys.defaultTime / (_sys.points[0].exitSpeed / 50.0));
+    if (_sys.plannedLength > 0)
+    {
+        firePower(_sys.points[0].power);
+        _sys.minTime = fmax(25, 100.0 / (_sys.points[0].speed / 100.0));
+        _sys.maxTime = fmin(_sys.defaultTime, _sys.defaultTime / (_sys.points[0].exitSpeed / 50.0));
+        Serial.print("motion finish:");
+        Serial.print(_sys.points[0].speed);
+        Serial.print(" - ");
+        Serial.print(_sys.minTime);
+        Serial.print(" - ");
+        Serial.println(_sys.maxTime);
+    }
 }
 void waitingPushPoint()
 {
     while (true)
     {
-        if (_sys.statesIndex <= 5)
+        if (_sys.plannedLength < 2)
         {
             break;
         }
-        delay(100);
+        delay(1);
         // #ifdef DEBUG
         //         String str = "waiting:";
         //         str += _sys.statesIndex;
@@ -449,7 +463,7 @@ void run()
 }
 bool motionStep()
 {
-    if (_sys.plannedIndex < 0)
+    if (_sys.plannedLength < 1)
     {
         return false;
     }
@@ -499,7 +513,7 @@ void nextWait()
     {
         _sys.isRunningState = MOTION_DECELETING;
     }
-    if (tt % 4 == 0)
+    if (tt % 2 == 0)
     {
         switch (_sys.isRunningState)
         {
@@ -507,10 +521,23 @@ void nextWait()
         {
             if (_sys.time > _sys.minTime)
             {
-                _sys.time -= 25;
+                _sys.time -= _sys.defaultAcceleration;
                 if (_sys.time < _sys.minTime)
                 {
                     _sys.time = _sys.minTime;
+                }
+                else
+                {
+
+                    Serial.print("state:");
+                    Serial.print(_sys.isRunningState);
+                    Serial.print(" - ");
+                    Serial.print(_sys.points[0].totalCount);
+                    Serial.print(" - ");
+                    Serial.print(_sys.points[0].accelCount);
+                    Serial.print(" - ");
+                    Serial.print("time:");
+                    Serial.println(_sys.time);
                 }
             }
             break;
@@ -519,7 +546,12 @@ void nextWait()
         {
             if (_sys.time < _sys.maxTime)
             {
-                _sys.time += 25;
+                _sys.time += _sys.defaultAcceleration;
+                Serial.print("state:");
+                Serial.print(_sys.isRunningState);
+                Serial.print(" - ");
+                Serial.print("time:");
+                Serial.println(_sys.time);
             }
             break;
         }
@@ -536,8 +568,8 @@ void nextWait()
 }
 void curveTo(long x1, long y1, long x2, long y2, long x3, long y3)
 {
-    long x0 = _sys.states[_sys.statesIndex].targetPosition[0];
-    long y0 = _sys.states[_sys.statesIndex].targetPosition[1];
+    long x0 = _sys.states[_sys.statesLength - 1].targetPosition[0];
+    long y0 = _sys.states[_sys.statesLength - 1].targetPosition[1];
     double subdiv_step = 1.0 / (NUM_STEPS + 1);
     double subdiv_step2 = subdiv_step * subdiv_step;
     double subdiv_step3 = subdiv_step * subdiv_step * subdiv_step;
@@ -603,8 +635,8 @@ void quadTo(long x1, long y1, long x2, long y2)
     str += y2;
     Serial.println(str);
 #endif
-    long x0 = _sys.states[_sys.statesIndex - 1].targetPosition[0];
-    long y0 = _sys.states[_sys.statesIndex - 1].targetPosition[1];
+    long x0 = _sys.states[_sys.statesLength - 1].targetPosition[0];
+    long y0 = _sys.states[_sys.statesLength - 1].targetPosition[1];
     int step = NUM_STEPS;
     double fx, fy;
     for (int i = 0; i < step; i++)
