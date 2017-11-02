@@ -7,7 +7,7 @@
 #define CURVE_SECTION 0.5
 #define NUM_STEPS 100
 #define NUM_AXIS 2
-#define DEBUG true
+// #define DEBUG true
 enum MOTION_STATE
 {
     MOTION_ACCELETING = 0,
@@ -49,12 +49,12 @@ struct SystemStatus
     long targetPosition[NUM_AXIS];
     long startPosition[NUM_AXIS];
     long timerCount = 0;
-    long time = 625;
-    long defaultTime = 625;
-    long defaultAcceleration = 25;
-    long defaultAccelCount = 50;
-    long defaultDecelCount = 50;
-    long maxTime = 1250;
+    long time = 4250;
+    long defaultTime = 4250;
+    long defaultAcceleration = 64;
+    long defaultAccelCount = 200;
+    long defaultDecelCount = 200;
+    long maxTime = 2250;
     long minTime = 25;
     PlannerPoint points[POINTS_COUNT];
     MotionState states[STATES_COUNT];
@@ -73,6 +73,7 @@ struct SystemStatus
     uint8_t powerPin = 10;
     String buffer = "";
     bool isFinish = true;
+    bool allowEnding = false;
 };
 SystemStatus _sys;
 MeStepper steppers[NUM_AXIS] = {MeStepper(SLOT_1), MeStepper(SLOT_2)};
@@ -88,6 +89,7 @@ void setup()
         steppers[i].disableOutputs();
     }
     Serial.println("opened");
+    moveTo(0, 0);
 }
 
 void loop()
@@ -141,6 +143,8 @@ void parseCommand(String cmd)
             }
         }
     }
+    _sys.isFinish = false;
+    _sys.allowEnding = false;
     switch (code)
     {
     case 'm':
@@ -246,15 +250,15 @@ void moveTo(long x, long y)
 void lineTo(long x, long y)
 {
     waitingPushPoint();
-    // #ifdef DEBUG
-    //     String str = "line:";
-    //     str += x;
-    //     str += ",";
-    //     str += y;
-    //     str += ",";
-    //     str += _sys.speed;
-    //     Serial.println(str);
-    // #endif
+#ifdef DEBUG
+    String str = "line:";
+    str += x;
+    str += ",";
+    str += y;
+    str += ",";
+    str += _sys.speed;
+    Serial.println(str);
+#endif
     addMotion(x, y, _sys.power, _sys.speed, _sys.acceleration);
 }
 void addMotion(long x, long y, uint8_t power, uint8_t speed, uint8_t accelaration)
@@ -275,7 +279,7 @@ void addMotion(long x, long y, uint8_t power, uint8_t speed, uint8_t accelaratio
 }
 void finishCommand()
 {
-    if (commandsLength() < 2)
+    if (commandsLength() < STATES_COUNT)
     {
         Serial.print("ok:");
         Serial.println(commandsLength());
@@ -283,7 +287,7 @@ void finishCommand()
 }
 int8_t commandsLength()
 {
-    return _sys.plannedLength;
+    return _sys.statesLength;
 }
 void setPower(uint8_t power)
 {
@@ -325,40 +329,43 @@ void shiftState()
     _sys.statesLength--;
     if (_sys.statesLength <= 0)
     {
-        if (!_sys.isFinish)
-        {
-            _sys.isFinish = true;
-            finishCommand();
-        }
+        finishCommand();
     }
 }
 void calcPlanned()
 {
-    if (_sys.plannedLength < 2 && _sys.statesLength > 1)
+    if (_sys.plannedLength < POINTS_COUNT)
     {
-        MotionState currentState = _sys.state;
-        shiftState();
-        MotionState nextState = _sys.state;
-        PlannerPoint point;
-        point.dir[0] = currentState.targetPosition[0] < nextState.targetPosition[0];
-        point.dir[1] = currentState.targetPosition[1] < nextState.targetPosition[1];
-        point.targetCount[0] = abs(nextState.targetPosition[0] - currentState.targetPosition[0]);
-        point.targetCount[1] = abs(nextState.targetPosition[1] - currentState.targetPosition[1]);
-        point.delta[0] = abs(point.targetCount[0]);
-        point.delta[1] = abs(point.targetCount[1]);
-        point.totalCount = point.delta[0] + point.delta[1];
-        point.enterSpeed = _sys.plannedIndex > 0 ? _sys.points[_sys.plannedIndex - 1].exitSpeed : _sys.defaultSpeed;
-        point.speed = fmax(1, currentState.speed);
-        point.exitSpeed = fmax(1, sqrt(nextState.speed));
-        point.acceleration = currentState.acceleration;
-        long dist = sqrt(point.delta[0] * point.delta[0] + point.delta[1] * point.delta[1]) / 2;
-        point.accelCount = point.totalCount - min(dist, _sys.defaultAccelCount);
-        point.decelCount = min(dist, _sys.defaultDecelCount);
-        point.power = nextState.power;
-        point.err = (point.delta[0] > point.delta[1] ? point.delta[0] : -point.delta[1]) / 2;
-        _sys.points[_sys.plannedIndex] = point;
-        _sys.plannedIndex++;
-        _sys.plannedLength++;
+        if (_sys.statesLength > 1)
+        {
+            _sys.allowEnding = true;
+            MotionState currentState = _sys.state;
+            shiftState();
+            MotionState nextState = _sys.state;
+            PlannerPoint point;
+            point.dir[0] = currentState.targetPosition[0] < nextState.targetPosition[0];
+            point.dir[1] = currentState.targetPosition[1] < nextState.targetPosition[1];
+            point.targetCount[0] = abs(nextState.targetPosition[0] - currentState.targetPosition[0]);
+            point.targetCount[1] = abs(nextState.targetPosition[1] - currentState.targetPosition[1]);
+            point.delta[0] = (point.targetCount[0]);
+            point.delta[1] = (point.targetCount[1]);
+            point.totalCount = point.delta[0] + point.delta[1];
+            point.enterSpeed = _sys.plannedIndex > 0 ? _sys.points[_sys.plannedIndex - 1].exitSpeed : _sys.defaultSpeed;
+            point.speed = fmax(1, currentState.speed);
+            point.exitSpeed = fmax(1, sqrt(nextState.speed));
+            point.acceleration = currentState.acceleration;
+            long dist = sqrt(point.delta[0] * point.delta[0] + point.delta[1] * point.delta[1]) / 2;
+            point.accelCount = point.totalCount - min(dist, _sys.defaultAccelCount);
+            point.decelCount = min(dist, _sys.defaultDecelCount);
+            point.power = currentState.power;
+            point.err = (point.delta[0] > point.delta[1] ? point.delta[0] : -point.delta[1]) / 2;
+            _sys.points[_sys.plannedIndex] = point;
+            _sys.plannedIndex++;
+            _sys.plannedLength++;
+        }
+        else
+        {
+        }
     }
 }
 /**
@@ -369,14 +376,18 @@ void calcPlanned()
  * */
 void shiftPlanned()
 {
-    if (_sys.plannedIndex > 0)
+    if (_sys.plannedLength > 0)
     {
-        for (int i = 0; i < _sys.plannedIndex; i++)
+        for (int i = 0; i < _sys.plannedLength - 1; i++)
         {
             _sys.points[i] = _sys.points[i + 1];
         }
         _sys.plannedIndex--;
         _sys.plannedLength--;
+    }
+    if (_sys.statesLength <= 0 && _sys.plannedLength <= 0)
+    {
+        finishCommand();
     }
 }
 void lockTimer()
@@ -401,37 +412,34 @@ uint8_t isRunningState()
 }
 void motionFinish()
 {
-    lockTimer();
-    shiftPlanned();
-    calcPlanned();
-    unlockTimer();
+    if (_sys.statesLength > 0 || _sys.plannedLength > 0)
+    {
+        lockTimer();
+        shiftPlanned();
+        calcPlanned();
+        unlockTimer();
+    }
     if (_sys.plannedLength > 0)
     {
         firePower(_sys.points[0].power);
         _sys.minTime = fmax(25, 100.0 / (_sys.points[0].speed / 100.0));
         _sys.maxTime = fmin(_sys.defaultTime, _sys.defaultTime / (_sys.points[0].exitSpeed / 50.0));
-        Serial.print("motion finish:");
-        Serial.print(_sys.points[0].speed);
-        Serial.print(" - ");
-        Serial.print(_sys.minTime);
-        Serial.print(" - ");
-        Serial.println(_sys.maxTime);
     }
 }
 void waitingPushPoint()
 {
     while (true)
     {
-        if (_sys.plannedLength < 2)
+        if (_sys.statesLength < STATES_COUNT)
         {
             break;
         }
-        delay(1);
-        // #ifdef DEBUG
-        //         String str = "waiting:";
-        //         str += _sys.statesIndex;
-        //         Serial.println(str);
-        // #endif
+        delay(200);
+#ifdef DEBUG
+        String str = "waiting:";
+        str += _sys.statesIndex;
+        Serial.println(str);
+#endif
     }
 }
 void initTimer()
@@ -528,16 +536,6 @@ void nextWait()
                 }
                 else
                 {
-
-                    Serial.print("state:");
-                    Serial.print(_sys.isRunningState);
-                    Serial.print(" - ");
-                    Serial.print(_sys.points[0].totalCount);
-                    Serial.print(" - ");
-                    Serial.print(_sys.points[0].accelCount);
-                    Serial.print(" - ");
-                    Serial.print("time:");
-                    Serial.println(_sys.time);
                 }
             }
             break;
@@ -547,11 +545,9 @@ void nextWait()
             if (_sys.time < _sys.maxTime)
             {
                 _sys.time += _sys.defaultAcceleration;
-                Serial.print("state:");
-                Serial.print(_sys.isRunningState);
-                Serial.print(" - ");
-                Serial.print("time:");
-                Serial.println(_sys.time);
+            }
+            else
+            {
             }
             break;
         }
