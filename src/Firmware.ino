@@ -58,8 +58,6 @@ struct SystemStatus
     uint8_t isRunningState = MOTION_ACCELETING;
     uint8_t powerPin = 10;
     String buffer = "";
-    bool isFinish = true;
-    bool allowEnding = false;
 };
 SystemStatus _sys;
 MeStepper steppers[NUM_AXIS] = {MeStepper(SLOT_1), MeStepper(SLOT_2)};
@@ -129,8 +127,6 @@ void parseCommand(String cmd)
             }
         }
     }
-    _sys.isFinish = false;
-    _sys.allowEnding = false;
     switch (code)
     {
     case 'm':
