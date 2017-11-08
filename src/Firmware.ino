@@ -363,21 +363,15 @@ void waitingForBusy()
 }
 void initTimer()
 {
-    // lockTimer(); // disable all interrupts
-    // TCCR1A = 0;
-    // TCCR1B = 0;
-    // TCNT1 = 0;
     cli();
     TCCR1A = 0;
     TCCR1B = 0;
     TCNT1 = 0;
-    OCR1A = 2000;           // compare match register 16MHz/256/1Hz
-    TCCR1B |= (1 << WGM12); // CTC mode
+    OCR1A = 2000;
+    TCCR1B |= (1 << WGM12);
     TCCR1B |= (1 << CS11);
-    // TCCR1B |= (1 << CS10);   // 64 prescaler
-    TIMSK1 |= (1 << OCIE1A); // enable timer compare interrupt
+    TIMSK1 |= (1 << OCIE1A);
     sei();
-    // unlockTimer(); // enable all interrupts
 }
 int tt = 0;
 ISR(TIMER1_COMPA_vect)
