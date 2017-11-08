@@ -232,7 +232,6 @@ void parseCommand(String cmd)
 
 void addMotion(long x, long y, uint8_t power, uint16_t speed, uint16_t acceleration)
 {
-
     _points[_sys.plannedIndex].targetPosition[0] = x;
     _points[_sys.plannedIndex].targetPosition[1] = y;
     _points[_sys.plannedIndex].dir[0] = _prevPoint.targetPosition[0] < _points[_sys.plannedIndex].targetPosition[0];
