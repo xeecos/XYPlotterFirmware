@@ -17,51 +17,47 @@ enum MOTION_STATE
 };
 typedef struct
 {
-    long err;
-    double delta[NUM_AXIS];
-    bool dir[NUM_AXIS];
-    long accelCount = 0;
-    long decelCount = 0;
-    long targetPosition[NUM_AXIS];
-    long targetCount[NUM_AXIS];
-    long totalCount = 0;
-    uint16_t speed = 1000;
-    uint16_t exitSpeed = 1000;
-    uint16_t acceleration = 1;
-    uint8_t power = 0;
+    volatile long err;
+    volatile double delta[NUM_AXIS];
+    volatile bool dir[NUM_AXIS];
+    volatile long accelCount = 0;
+    volatile long decelCount = 0;
+    volatile long targetPosition[NUM_AXIS];
+    volatile long targetCount[NUM_AXIS];
+    volatile long totalCount = 0;
+    volatile uint16_t speed = 1000;
+    volatile uint16_t exitSpeed = 1000;
+    volatile uint16_t acceleration = 1;
+    volatile uint8_t power = 0;
 } PlannerPoint;
 typedef struct
 {
     bool running = false;
-    long currentPosition[NUM_AXIS] = {0, 0};
-    long targetPosition[NUM_AXIS];
-    long startPosition[NUM_AXIS];
-    long lastPosition[NUM_AXIS] = {0, 0};
+    volatile long currentPosition[NUM_AXIS] = {0, 0};
+    volatile long targetPosition[NUM_AXIS];
+    volatile long startPosition[NUM_AXIS];
+    volatile long lastPosition[NUM_AXIS] = {0, 0};
     long timerCount = 0;
     long defaultTime = 4250;
     long defaultAcceleration = 64;
     long defaultAccelCount = 200;
     long defaultDecelCount = 200;
-    long maxSpeed = 100;
-    long minSpeed = 100;
-    long currentSpeed = 1;
-    PlannerPoint points[POINTS_COUNT];
-    PlannerPoint prevPoint;
-    uint8_t power = 0;
     uint16_t defaultSpeed = 500;
-    uint16_t speed = 100;
-    uint16_t acceleration = 100;
-    uint8_t statesIndex = 0;
-    uint8_t statesLength = 0;
-    uint8_t plannedIndex = 0;
-    uint8_t plannedLength = 0;
-    uint8_t isRunningState = MOTION_ACCELETING;
+    volatile long maxSpeed = 100;
+    volatile long minSpeed = 100;
+    volatile long currentSpeed = 1;
+    volatile uint8_t power = 0;
+    volatile uint16_t speed = 100;
+    volatile uint16_t acceleration = 100;
+    volatile uint8_t plannedLength = 0;
+    volatile uint8_t plannedIndex = 0;
+    volatile uint8_t isRunningState = MOTION_ACCELETING;
     uint8_t powerPin = 10;
     String buffer = "";
 } SystemStatus;
 static SystemStatus _sys;
-volatile uint8_t plannedLength = 0;
-volatile uint8_t plannedIndex = 0;
+static PlannerPoint _points[POINTS_COUNT];
+static PlannerPoint _prevPoint;
 volatile bool busy = false;
 MeStepper steppers[NUM_AXIS] = {MeStepper(SLOT_1), MeStepper(SLOT_2)};
 
@@ -236,32 +232,31 @@ void parseCommand(String cmd)
 
 void addMotion(long x, long y, uint8_t power, uint16_t speed, uint16_t acceleration)
 {
-    PlannerPoint prevPoint = _sys.prevPoint;
 
-    _sys.points[plannedIndex].targetPosition[0] = x;
-    _sys.points[plannedIndex].targetPosition[1] = y;
-    _sys.points[plannedIndex].dir[0] = prevPoint.targetPosition[0] < _sys.points[plannedIndex].targetPosition[0];
-    _sys.points[plannedIndex].dir[1] = prevPoint.targetPosition[1] < _sys.points[plannedIndex].targetPosition[1];
-    _sys.points[plannedIndex].targetCount[0] = abs(_sys.points[plannedIndex].targetPosition[0] - prevPoint.targetPosition[0]);
-    _sys.points[plannedIndex].targetCount[1] = abs(_sys.points[plannedIndex].targetPosition[1] - prevPoint.targetPosition[1]);
-    _sys.points[plannedIndex].delta[0] = (_sys.points[plannedIndex].targetCount[0]);
-    _sys.points[plannedIndex].delta[1] = (_sys.points[plannedIndex].targetCount[1]);
-    _sys.points[plannedIndex].totalCount = _sys.points[plannedIndex].delta[0] + _sys.points[plannedIndex].delta[1];
-    _sys.points[plannedIndex].speed = speed;
-    if (plannedIndex > 1)
+    _points[_sys.plannedIndex].targetPosition[0] = x;
+    _points[_sys.plannedIndex].targetPosition[1] = y;
+    _points[_sys.plannedIndex].dir[0] = _prevPoint.targetPosition[0] < _points[_sys.plannedIndex].targetPosition[0];
+    _points[_sys.plannedIndex].dir[1] = _prevPoint.targetPosition[1] < _points[_sys.plannedIndex].targetPosition[1];
+    _points[_sys.plannedIndex].targetCount[0] = abs(_points[_sys.plannedIndex].targetPosition[0] - _prevPoint.targetPosition[0]);
+    _points[_sys.plannedIndex].targetCount[1] = abs(_points[_sys.plannedIndex].targetPosition[1] - _prevPoint.targetPosition[1]);
+    _points[_sys.plannedIndex].delta[0] = (_points[_sys.plannedIndex].targetCount[0]);
+    _points[_sys.plannedIndex].delta[1] = (_points[_sys.plannedIndex].targetCount[1]);
+    _points[_sys.plannedIndex].totalCount = _points[_sys.plannedIndex].delta[0] + _points[_sys.plannedIndex].delta[1];
+    _points[_sys.plannedIndex].speed = speed;
+    if (_sys.plannedIndex > 1)
     {
-        _sys.points[plannedIndex - 1].exitSpeed = _sys.points[plannedIndex].speed;
+        _points[_sys.plannedIndex - 1].exitSpeed = _points[_sys.plannedIndex].speed;
     }
-    _sys.points[plannedIndex].acceleration = acceleration;
-    long dist = sqrt(_sys.points[plannedIndex].delta[0] * _sys.points[plannedIndex].delta[0] + _sys.points[plannedIndex].delta[1] * _sys.points[plannedIndex].delta[1]) / 2;
-    _sys.points[plannedIndex].accelCount = _sys.points[plannedIndex].totalCount - min(dist, _sys.defaultAccelCount);
-    _sys.points[plannedIndex].decelCount = min(dist, _sys.defaultDecelCount);
-    _sys.points[plannedIndex].power = power;
-    _sys.points[plannedIndex].err = (_sys.points[plannedIndex].delta[0] > _sys.points[plannedIndex].delta[1] ? _sys.points[plannedIndex].delta[0] : -_sys.points[plannedIndex].delta[1]) / 2;
+    _points[_sys.plannedIndex].acceleration = acceleration;
+    long dist = sqrt(_points[_sys.plannedIndex].delta[0] * _points[_sys.plannedIndex].delta[0] + _points[_sys.plannedIndex].delta[1] * _points[_sys.plannedIndex].delta[1]) / 2;
+    _points[_sys.plannedIndex].accelCount = _points[_sys.plannedIndex].totalCount - min(dist, _sys.defaultAccelCount);
+    _points[_sys.plannedIndex].decelCount = min(dist, _sys.defaultDecelCount);
+    _points[_sys.plannedIndex].power = power;
+    _points[_sys.plannedIndex].err = (_points[_sys.plannedIndex].delta[0] > _points[_sys.plannedIndex].delta[1] ? _points[_sys.plannedIndex].delta[0] : -_points[_sys.plannedIndex].delta[1]) / 2;
 
-    _sys.prevPoint = _sys.points[plannedIndex];
-    plannedIndex += 1;
-    plannedLength += 1;
+    _prevPoint = _points[_sys.plannedIndex];
+    _sys.plannedIndex += 1;
+    _sys.plannedLength += 1;
 }
 void finishCommand()
 {
@@ -274,7 +269,7 @@ void finishCommand()
 }
 int8_t commandsLength()
 {
-    return plannedLength;
+    return _sys.plannedLength;
 }
 void setPower(uint8_t power)
 {
@@ -307,14 +302,14 @@ void closePower()
 
 void shiftPlanned()
 {
-    if (plannedLength > 0)
+    if (_sys.plannedLength > 0)
     {
-        for (int i = 0; i < plannedLength - 1; i++)
+        for (int i = 0; i < _sys.plannedLength - 1; i++)
         {
-            _sys.points[i] = _sys.points[i + 1];
+            _points[i] = _points[i + 1];
         }
-        plannedIndex -= 1;
-        plannedLength -= 1;
+        _sys.plannedIndex -= 1;
+        _sys.plannedLength -= 1;
     }
 }
 void lockTimer()
@@ -341,18 +336,18 @@ uint8_t isRunningState()
 }
 void motionFinish()
 {
-    if (plannedLength > 0)
+    if (_sys.plannedLength > 0)
     {
         shiftPlanned();
-        if (plannedLength > 0)
+        if (_sys.plannedLength > 0)
         {
-            firePower(_sys.points[0].power);
-            _sys.maxSpeed = _sys.points[0].speed;
-            _sys.minSpeed = fmax(10, _sys.points[0].exitSpeed);
+            firePower(_points[0].power);
+            _sys.maxSpeed = _points[0].speed;
+            _sys.minSpeed = fmax(10, _points[0].exitSpeed);
         }
 #ifdef DEBUG
         String str = "finish:";
-        str += plannedLength;
+        str += _sys.plannedLength;
         Serial.println(str);
 #endif
     }
@@ -361,31 +356,10 @@ void waitingForBusy()
 {
     for (;;)
     {
-        int v = plannedLength;
-        if (v < POINTS_COUNT)
+        if (_sys.plannedLength < POINTS_COUNT)
         {
-            // #ifdef DEBUG
-            //             String str = "exiting:";
-            //             str += plannedLength;
-            //             Serial.println(str);
-            // #endif
             return;
         }
-        else
-        {
-            // for (int i = 0; i < 1000; i++)
-            // {
-            //     noInterrupts();
-            //     int v = plannedLength;
-            //     interrupts();
-            //     if (v < POINTS_COUNT)
-            //     {
-            //         break;
-            //     }
-            //     delay(1);
-            // }
-        }
-        // delay(1);
     }
 }
 void initTimer()
@@ -428,25 +402,25 @@ void run()
 }
 bool motionStep()
 {
-    if (plannedLength < 1)
+    if (_sys.plannedLength < 1)
     {
         return false;
     }
-    firePower(_sys.points[0].power);
-    long distX = _sys.points[0].delta[0];
-    long distY = _sys.points[0].delta[1];
+    firePower(_points[0].power);
+    long distX = _points[0].delta[0];
+    long distY = _points[0].delta[1];
     if (distX <= 0 && distY <= 0)
         return false;
-    long e2 = _sys.points[0].err;
-    if (e2 > -_sys.points[0].delta[0])
+    long e2 = _points[0].err;
+    if (e2 > -_points[0].delta[0])
     {
-        _sys.points[0].err -= _sys.points[0].delta[1];
-        stepX(_sys.points[0].dir[0]);
+        _points[0].err -= _points[0].delta[1];
+        stepX(_points[0].dir[0]);
     }
-    if (e2 < _sys.points[0].delta[1])
+    if (e2 < _points[0].delta[1])
     {
-        _sys.points[0].err += _sys.points[0].delta[0];
-        stepY(_sys.points[0].dir[1]);
+        _points[0].err += _points[0].delta[0];
+        stepY(_points[0].dir[1]);
     }
     nextWait();
     return true;
@@ -454,26 +428,26 @@ bool motionStep()
 void stepX(bool dir)
 {
     _sys.currentPosition[0] += dir ? 1 : -1;
-    _sys.points[0].delta[0]--;
-    _sys.points[0].totalCount--;
+    _points[0].delta[0]--;
+    _points[0].totalCount--;
     steppers[0].step(dir);
 }
 void stepY(bool dir)
 {
     _sys.currentPosition[1] += dir ? 1 : -1;
-    _sys.points[0].delta[1]--;
-    _sys.points[0].totalCount--;
+    _points[0].delta[1]--;
+    _points[0].totalCount--;
     steppers[1].step(dir);
 }
 void nextWait()
 {
     if (tt % 2 == 0)
     {
-        if (_sys.points[0].totalCount > _sys.points[0].accelCount)
+        if (_points[0].totalCount > _points[0].accelCount)
         {
             _sys.isRunningState = MOTION_ACCELETING;
         }
-        else if (_sys.points[0].totalCount > _sys.points[0].decelCount)
+        else if (_points[0].totalCount > _points[0].decelCount)
         {
             _sys.isRunningState = MOTION_NORMAL;
         }
@@ -487,7 +461,7 @@ void nextWait()
         {
             if (_sys.currentSpeed < _sys.maxSpeed)
             {
-                _sys.currentSpeed += _sys.acceleration;
+                _sys.currentSpeed += _points[0].acceleration;
                 if (_sys.currentSpeed > _sys.maxSpeed)
                 {
                     _sys.currentSpeed = _sys.maxSpeed;
@@ -499,7 +473,7 @@ void nextWait()
         {
             if (_sys.currentSpeed > _sys.minSpeed)
             {
-                _sys.currentSpeed -= _sys.acceleration;
+                _sys.currentSpeed -= _points[0].acceleration;
                 if (_sys.currentSpeed < _sys.minSpeed)
                 {
                     _sys.currentSpeed = _sys.minSpeed;
