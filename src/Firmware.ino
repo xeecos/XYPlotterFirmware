@@ -210,6 +210,7 @@ void parseCommand(String cmd)
     }
     case 'o':
     {
+        waitingForFinish();
         if (v[0] > 0)
         {
             for (int i = 0; i < NUM_AXIS; i++)
@@ -356,6 +357,16 @@ void waitingForBusy()
     for (;;)
     {
         if (_sys.plannedLength < POINTS_COUNT)
+        {
+            return;
+        }
+    }
+}
+void waitingForFinish()
+{
+    for (;;)
+    {
+        if (_sys.plannedLength < 1)
         {
             return;
         }
