@@ -3,10 +3,10 @@
 #define SBI(n, b) (n |= _BV(b))
 #define CBI(n, b) (n &= ~_BV(b))
 
-#define POINTS_COUNT 6
-#define PULSES_PER_MM 10
+#define POINTS_COUNT 8
+#define PULSES_PER_MM 100
 #define CURVE_SECTION 0.5
-#define NUM_STEPS 20
+#define NUM_STEPS 10
 #define NUM_AXIS 2
 // #define DEBUG true
 enum MOTION_STATE
@@ -36,7 +36,7 @@ typedef struct
     volatile long targetCount[NUM_AXIS];
     volatile long totalCount = 0;
     volatile uint16_t speed = 1000;
-    volatile uint16_t exitSpeed = 1000;
+    volatile uint16_t exitSpeed = 100;
     volatile uint16_t acceleration = 1;
     volatile uint8_t power = 0;
 } PlannerPoint;
@@ -47,17 +47,13 @@ typedef struct
     volatile long targetPosition[NUM_AXIS];
     volatile long startPosition[NUM_AXIS];
     volatile long lastPosition[NUM_AXIS] = {0, 0};
-    long timerCount = 0;
-    long defaultTime = 4250;
     long defaultAcceleration = 64;
     long defaultAccelCount = 200;
     long defaultDecelCount = 200;
-    uint16_t defaultSpeed = 500;
-    volatile long maxSpeed = 100;
-    volatile long minSpeed = 100;
+    uint16_t defaultSpeed = 1000;
     volatile long currentSpeed = 1;
     volatile uint8_t power = 0;
-    volatile uint16_t speed = 100;
+    volatile uint16_t speed = 1000;
     volatile uint16_t acceleration = 100;
     volatile uint8_t plannedLength = 0;
     volatile uint8_t plannedIndex = 0;
@@ -125,22 +121,34 @@ void parseCommand()
             case 0:
             case 1:
             {
-                if (hasCommand('p'))
+                if (hasCommand('p') && cmdId == 1)
                 {
-                    firePower(getCommand('p'));
+                    setPower(getCommand('p'));
+                }
+                if (cmdId == 0)
+                {
+                    setPower(0);
                 }
                 if (hasCommand('f'))
                 {
                     setSpeed(getCommand('f'));
+                    setAccel(200);
                 }
-                long x = (hasCommand('x') ? getCommand('x') : 0) * PULSES_PER_MM;
-                long y = (hasCommand('y') ? getCommand('y') : 0) * PULSES_PER_MM;
+                double x = (hasCommand('x') ? getCommand('x') : 0) * PULSES_PER_MM;
+                double y = (hasCommand('y') ? getCommand('y') : 0) * PULSES_PER_MM;
                 if (_sys.isRelative)
                 {
                     x += _sys.targetPosition[0];
                     y += _sys.targetPosition[1];
                 }
-                lineTo(x, y);
+                if (cmdId == 0)
+                {
+                    moveTo(x, y);
+                }
+                else
+                {
+                    lineTo(x, y);
+                }
                 _sys.targetPosition[0] = x;
                 _sys.targetPosition[1] = y;
             }
@@ -314,8 +322,6 @@ void motionFinish()
         if (_sys.plannedLength > 0)
         {
             firePower(_points[0].power);
-            _sys.maxSpeed = _points[0].speed;
-            _sys.minSpeed = fmax(10, _points[0].exitSpeed);
         }
 #ifdef DEBUG
         String str = "finish:";
@@ -435,24 +441,24 @@ void nextWait()
         {
         case MOTION_ACCELETING:
         {
-            if (_sys.currentSpeed < _sys.maxSpeed)
+            if (_sys.currentSpeed < _points[0].speed)
             {
                 _sys.currentSpeed += _points[0].acceleration;
-                if (_sys.currentSpeed > _sys.maxSpeed)
+                if (_sys.currentSpeed > _points[0].speed)
                 {
-                    _sys.currentSpeed = _sys.maxSpeed;
+                    _sys.currentSpeed = _points[0].speed;
                 }
             }
             break;
         }
         case MOTION_DECELETING:
         {
-            if (_sys.currentSpeed > _sys.minSpeed)
+            if (_sys.currentSpeed > _points[0].exitSpeed)
             {
                 _sys.currentSpeed -= _points[0].acceleration;
-                if (_sys.currentSpeed < _sys.minSpeed)
+                if (_sys.currentSpeed < _points[0].exitSpeed)
                 {
-                    _sys.currentSpeed = _sys.minSpeed;
+                    _sys.currentSpeed = _points[0].exitSpeed;
                 }
             }
             break;
@@ -484,7 +490,7 @@ void moveTo(long x, long y)
 #endif
     _sys.startPosition[0] = x;
     _sys.startPosition[1] = y;
-    addMotion(x, y, 0, _sys.maxSpeed, _sys.acceleration);
+    addMotion(x, y, 0, _sys.speed, _sys.acceleration);
 }
 void lineTo(long x, long y)
 {
