@@ -17,16 +17,6 @@ enum MOTION_STATE
 };
 typedef struct
 {
-    volatile double x;
-    volatile double y;
-} Point;
-typedef struct
-{
-    Point start;
-    Point end;
-} Points;
-typedef struct
-{
     volatile long err;
     volatile double delta[NUM_AXIS];
     volatile bool dir[NUM_AXIS];
