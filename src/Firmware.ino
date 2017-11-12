@@ -1,9 +1,8 @@
 #include <Arduino.h>
 #include <MeStepper.h>
-#define SBI(n, b) (n |= _BV(b))
-#define CBI(n, b) (n &= ~_BV(b))
-#define POINTS_COUNT 100
-#define PULSES_PER_MM 100
+#include <28BYJ.h>
+#define POINTS_COUNT 6
+#define PULSES_PER_MM 166.66
 #define CURVE_SECTION 0.5
 #define NUM_STEPS 10
 #define NUM_AXIS 2
@@ -24,9 +23,9 @@ typedef struct
     volatile long targetPosition[NUM_AXIS];
     volatile long targetCount[NUM_AXIS];
     volatile long totalCount = 0;
-    volatile uint16_t speed = 1000;
-    volatile uint16_t exitSpeed = 1000;
-    volatile uint16_t acceleration = 1;
+    volatile uint16_t speed = 10000;
+    volatile uint16_t exitSpeed = 10000;
+    volatile uint16_t acceleration = 100;
     volatile uint8_t power = 0;
 } PlannerPoint;
 typedef struct
@@ -38,17 +37,17 @@ typedef struct
     volatile long defaultAcceleration = 64;
     volatile long defaultAccelCount = 200;
     volatile long defaultDecelCount = 200;
-    volatile uint16_t defaultSpeed = 1000;
-    volatile long currentSpeed = 100;
+    volatile uint16_t defaultSpeed = 10000;
+    volatile long currentSpeed = 10000;
     volatile uint8_t power = 0;
-    volatile uint16_t speed = 1000;
-    volatile uint16_t acceleration = 100;
+    volatile uint16_t speed = 10000;
+    volatile uint16_t acceleration = 1000;
     volatile uint8_t plannedLength = 0;
     volatile uint8_t plannedIndex = 0;
     volatile uint8_t isRunningState = MOTION_ACCELETING;
     volatile bool isRelative = false;
-    uint8_t powerPin = 10;
-    String buffer;
+    uint8_t powerPin = 6;
+    String buffer = "";
     volatile int bufferIndex = 0;
     volatile long during = 1000;
     volatile long currentTime = 0;
@@ -58,118 +57,81 @@ static PlannerPoint _points[POINTS_COUNT];
 static PlannerPoint _prevPoint;
 volatile bool busy = false;
 volatile bool isbusy = false;
+#ifdef MAKEBLOCK
 MeStepper steppers[NUM_AXIS] = {MeStepper(SLOT_1), MeStepper(SLOT_2)};
+#endif
+SP28BYJ steppers[NUM_AXIS] = {SP28BYJ(2, 3, 7, 8), SP28BYJ(9, 10, 11, 12)};
 
 void setup()
 {
-    Serial.begin(250000);
+    Serial.begin(38400);
     delay(1000);
-    // initTimer();
+    initTimer();
+#ifdef MAKEBLOCK
     for (int i = 0; i < NUM_AXIS; i++)
     {
         steppers[i].setMicroStep(16);
         steppers[i].disableOutputs();
     }
+#endif
     Serial.println("opened");
     setPower(0);
     moveTo(0, 0);
-    finishCommand();
+    for (;;)
+    {
+        // motion();
+        if (Serial.available())
+        {
+            char c = Serial.read();
+            if (c == '\n')
+            {
+                parseCommand();
+                _sys.buffer = "";
+            }
+            else
+            {
+                _sys.buffer += c;
+            }
+        }
+    }
 }
 
 void loop()
 {
-    if (Serial.available())
-    {
-        char c = Serial.read();
-        if (c == '\n')
-        {
-            finishCommand();
-            // if (!isbusy)
-            parseCommand(_sys.buffer);
-            _sys.buffer = "";
-            // _sys.bufferIndex = 0;
-            // for (int i = 0; i < 128; i++)
-            // {
-            //     _sys.buffer[i] = 0;
-            // }
-        }
-        else
-        {
-            _sys.buffer += c;
-            // _sys.buffer[_sys.bufferIndex] = c;
-            // _sys.bufferIndex++;
-            // if (_sys.bufferIndex > 128)
-            // {
-            //     _sys.bufferIndex = 0;
-            //     while (Serial.read() != '\n')
-            //     {
-            //         break;
-            //     }
-            //     Serial.println("error!!!!!");
-            // }
-        }
-    }
-    motion();
 }
-void parseCommands()
+void parseCommand()
 {
-    isbusy = true;
-    // cli();
-    // String cmds;
-    // int i = 0;
-    // for (i = 0; i <= _sys.bufferIndex; i++)
-    // {
-    //     cmds += _sys.buffer[i];
-    // }
-    // int counter = 0;
-    // int lastIndex = 0;
-    // for (i = 0; i < cmds.length(); i++)
-    // {
-    //     if (cmds.charAt(i) == ';')
-    //     {
-    //         parseCommand(cmds.substring(lastIndex, i));
-    //         finishCommand();
-    //         lastIndex = i + 1;
-    //     }
-    // }
-    // parseCommand(cmds.substring(lastIndex, i));
-    // sei();
-    isbusy = false;
-    // if (_sys.plannedLength % 2 == 0)
-}
-void parseCommand(String cmd)
-{
-    cmd.toLowerCase();
-    // Serial.println(cmd);
+    _sys.buffer.toLowerCase();
+    // Serial.println(_sys.buffer);
     int cmdId;
-    if (cmd.length() > 2)
+    if (_sys.buffer.length() > 2)
     {
-        if (hasCommand(cmd, 'g'))
+        if (hasCommand('g'))
         {
-            cmdId = getCommand(cmd, 'g');
+            cmdId = getCommand('g');
             switch (cmdId)
             {
             case 0:
             case 1:
             {
-                if (hasCommand(cmd, 'p') && cmdId == 1)
+                if (hasCommand('p') && cmdId == 1)
                 {
-                    setPower(getCommand(cmd, 'p'));
+                    setPower(getCommand('p'));
                 }
                 if (cmdId == 0)
                 {
                     setPower(0);
                 }
-                if (hasCommand(cmd, 'f'))
+                if (hasCommand('f'))
                 {
-                    setSpeed(getCommand(cmd, 'f'));
+                    setSpeed(getCommand('f'));
                 }
-                if (hasCommand(cmd, 'a'))
+                if (hasCommand('a'))
                 {
-                    setAccel(getCommand(cmd, 'a'));
+                    setAccel(getCommand('a'));
                 }
-                double x = (hasCommand(cmd, 'x') ? fmax(-30, fmin(30, getCommand(cmd, 'x'))) * PULSES_PER_MM : _sys.targetPosition[0]);
-                double y = (hasCommand(cmd, 'y') ? fmax(-30, fmin(30, getCommand(cmd, 'y'))) * PULSES_PER_MM : _sys.targetPosition[1]);
+                double x = hasCommand('x') ? getCommand('x') * PULSES_PER_MM : (_sys.isRelative ? 0 : _sys.targetPosition[0]);
+                double y = hasCommand('y') ? getCommand('y') * PULSES_PER_MM : (_sys.isRelative ? 0 : _sys.targetPosition[1]);
                 if (_sys.isRelative)
                 {
                     x += _sys.targetPosition[0];
@@ -208,15 +170,16 @@ void parseCommand(String cmd)
             break;
             }
         }
-        else if (hasCommand(cmd, 'm'))
+        else if (hasCommand('m'))
         {
-            cmdId = getCommand(cmd, 'm');
+            cmdId = getCommand('m');
             switch (cmdId)
             {
             case 1:
             {
                 waitingForFinish();
-                if (hasCommand(cmd, 'p') && getCommand(cmd, 'p') == 1)
+#ifdef MAKEBLOCK
+                if (hasCommand('p') && getCommand('p') == 1)
                 {
                     for (int i = 0; i < NUM_AXIS; i++)
                     {
@@ -230,14 +193,15 @@ void parseCommand(String cmd)
                         steppers[i].disableOutputs();
                     }
                 }
+#endif
                 break;
             }
             case 4:
             {
                 waitingForFinish();
-                if (hasCommand(cmd, 'p'))
+                if (hasCommand('p'))
                 {
-                    firePower(getCommand(cmd, 'p'));
+                    firePower(getCommand('p'));
                 }
                 else
                 {
@@ -247,6 +211,7 @@ void parseCommand(String cmd)
             }
             }
         }
+        finishCommand();
     }
 }
 
@@ -369,31 +334,40 @@ void waitingForFinish()
 }
 void initTimer()
 {
-    cli();
-    TCCR1A = 0;
-    TCCR1B = 0;
-    TCNT1 = 0;
-    OCR1A = 100;
+    cli(); //stop interrupts
+    //set timer1 interrupt at 1kHz
+    TCCR1A = 0; // set entire TCCR1A register to 0
+    TCCR1B = 0; // same for TCCR1B
+    TCNT1 = 0;  //initialize counter value to 0
+    // set timer count for 1khz increments
+    OCR1A = 1999; // = (16*10^6) / (1000*8) - 1
+    //had to use 16 bit timer1 for this bc 1999>255, but could switch to timers 0 or 2 with larger prescaler
+    // turn on CTC mode
     TCCR1B |= (1 << WGM12);
+    // Set CS11 bit for 8 prescaler
     TCCR1B |= (1 << CS11);
+    // enable timer compare interrupt
     TIMSK1 |= (1 << OCIE1A);
-    sei();
+    sei(); //allow interrupts
 }
 int tt = 0;
-// ISR(TIMER1_COMPA_vect)
+ISR(TIMER1_COMPA_vect)
+{
+    motion();
+}
 void motion()
 {
-    if (micros() - _sys.currentTime >= _sys.during)
-    {
-        // if (busy)
-        // {
-        //     return;
-        // }
-        // busy = true;
-        run();
-        // busy = false;
-        _sys.currentTime = micros();
-    }
+    // if (micros() - _sys.currentTime >= _sys.during)
+    // {
+    // if (busy)
+    // {
+    //     return;
+    // }
+    // busy = true;
+    run();
+    // busy = false;
+    //     _sys.currentTime = micros();
+    // }
 }
 void run()
 {
@@ -408,7 +382,7 @@ bool motionStep()
     {
         return false;
     }
-    // firePower(_points[0].power);
+    firePower(_points[0].power);
     long distX = _points[0].delta[0];
     long distY = _points[0].delta[1];
     if (distX <= 0 && distY <= 0)
@@ -488,8 +462,10 @@ void nextWait()
     }
     }
     tt = 0;
-    _sys.during = 1600000 / _sys.currentSpeed - 1;
-    _sys.during = _sys.during > 10000 ? 10000 : (_sys.during < 10 ? 10 : _sys.during);
+    // _sys.during = 160000 / (_sys.currentSpeed + 1);
+    _sys.currentSpeed = _sys.currentSpeed > 500 ? 500 : (_sys.currentSpeed < 50 ? 50 : _sys.currentSpeed);
+    OCR1A = 2000000 / _sys.currentSpeed - 1;
+    // _sys.during = _sys.during > 100000 ? 100000 : (_sys.during < 1500 ? 1500 : _sys.during);
 }
 /**
  * Motion Parse
@@ -524,40 +500,40 @@ void lineTo(long x, long y)
     addMotion(x, y, _sys.power, _sys.speed, _sys.acceleration);
 }
 
-bool hasCommand(String cmd, char cmdId)
+bool hasCommand(char cmdId)
 {
     int index = 0;
     char c = 0;
     while (c != cmdId)
     {
-        if (index >= cmd.length())
+        if (index >= _sys.buffer.length())
         {
             return false;
         }
         else
         {
-            c = cmd.charAt(index);
+            c = _sys.buffer.charAt(index);
         }
         index++;
     }
     return true;
 }
-double getCommand(String cmd, char cmdId)
+double getCommand(char cmdId)
 {
-    int index = cmd.indexOf(cmdId);
-    int startIndex = cmd.indexOf(cmdId) + 1;
+    int index = _sys.buffer.indexOf(cmdId);
+    int startIndex = _sys.buffer.indexOf(cmdId) + 1;
     char c = 0;
     while (c != ' ')
     {
         index++;
-        if (index >= cmd.length())
+        if (index >= _sys.buffer.length())
         {
             break;
         }
         else
         {
-            c = cmd.charAt(index);
+            c = _sys.buffer.charAt(index);
         }
     }
-    return cmd.substring(startIndex, index).toDouble();
+    return _sys.buffer.substring(startIndex, index).toDouble();
 }
