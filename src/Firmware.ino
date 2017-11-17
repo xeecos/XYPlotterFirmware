@@ -81,13 +81,13 @@ void setup()
 {
     Serial.begin(115200);
     delay(1000);
+    initTimer();
+#ifdef MAKEBLOCK
     pinMode(MISO, OUTPUT);
     // turn on SPI in slave mode
     SPCR |= _BV(SPE);
     // turn on interrupts
     SPCR |= _BV(SPIE);
-    initTimer();
-#ifdef MAKEBLOCK
     pinMode(47, OUTPUT);
     pinMode(48, OUTPUT);
     pinMode(6, OUTPUT);
