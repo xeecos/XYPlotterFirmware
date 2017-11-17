@@ -1,13 +1,17 @@
 #include <Arduino.h>
 #include <MeStepper.h>
 #include <28BYJ.h>
+// #define MAKEBLOCK 1
+// #define DEBUG true
 #define POINTS_COUNT 10
-#define PULSES_PER_MM 80 //166.66
+#ifdef MAKEBLOCK
+#define PULSES_PER_MM 80
+#else
+#define PULSES_PER_MM 166.66
+#endif
 #define CURVE_SECTION 0.5
 #define NUM_STEPS 10
 #define NUM_AXIS 2
-#define MAKEBLOCK 1
-// #define DEBUG true
 enum MOTION_STATE
 {
     MOTION_ACCELETING = 0,
@@ -17,7 +21,8 @@ enum MOTION_STATE
 typedef struct
 {
     volatile long err;
-    volatile double delta[NUM_AXIS];
+    volatile long delta[NUM_AXIS];
+    volatile long restCount[NUM_AXIS];
     volatile bool dir[NUM_AXIS];
     volatile long accelCount = 0;
     volatile long decelCount = 0;
@@ -100,7 +105,20 @@ void setup()
     moveTo(0, 0);
     for (;;)
     {
-        // motion();
+        if (Serial.available)
+        {
+            char c = Serial.read();
+            if (c == '\n')
+            {
+                Serial.println(_sys.buffer);
+                parseCommand();
+                _sys.buffer = "";
+            }
+            else
+            {
+                _sys.buffer += c;
+            }
+        }
         if (_sys.isSpiProcessing)
         {
             _sys.isSpiReceiving = false;
@@ -150,31 +168,9 @@ void setup()
         }
     }
 }
-// double tttt = 0;
-// long kkk = 0;
 ISR(SPI_STC_vect)
 {
     char c = SPDR;
-    /*test speed
-    if (tttt == 0)
-    {
-        tttt = micros() / 1000.0;
-    }
-    if (c > 9)
-    {
-        ttt++;
-    }
-    if (ttt >= 1024)
-    {
-        kkk++;
-        float n = (micros() / 1000.0 - tttt) / 1000.0;
-        Serial.print(ttt / n / 1024.0);
-        Serial.print(":");
-        Serial.print(kkk);
-        Serial.print("\n");
-        ttt = 0;
-        tttt = micros() / 1000.0;
-    }*/
     if (c > 0 && c < 0xff)
     {
         if (!_sys.isSpiProcessing)
@@ -332,6 +328,8 @@ void addMotion(long x, long y, uint8_t power, uint16_t speed, uint16_t accelerat
     _points[_sys.plannedIndex].targetCount[1] = abs(_points[_sys.plannedIndex].targetPosition[1] - _prevPoint.targetPosition[1]);
     _points[_sys.plannedIndex].delta[0] = (_points[_sys.plannedIndex].targetCount[0]);
     _points[_sys.plannedIndex].delta[1] = (_points[_sys.plannedIndex].targetCount[1]);
+    _points[_sys.plannedIndex].restCount[0] = (_points[_sys.plannedIndex].targetCount[0]);
+    _points[_sys.plannedIndex].restCount[1] = (_points[_sys.plannedIndex].targetCount[1]);
     _points[_sys.plannedIndex].totalCount = _points[_sys.plannedIndex].delta[0] + _points[_sys.plannedIndex].delta[1];
     _points[_sys.plannedIndex].speed = speed;
     if (_sys.plannedIndex > 0)
@@ -494,20 +492,18 @@ bool motionStep()
     {
         return false;
     }
-    // firePower(_points[0].power);
-    long distX = _points[0].delta[0];
-    long distY = _points[0].delta[1];
-    if (distX <= 0 && distY <= 0)
+    firePower(_points[0].power);
+    if (_points[0].restCount[0] <= 0 && _points[0].restCount[1] <= 0)
         return false;
     long e2 = _points[0].err;
-    if (e2 > -distX)
+    if (e2 > -_points[0].delta[0])
     {
-        _points[0].err -= distY;
+        _points[0].err -= _points[0].delta[1];
         stepX(_points[0].dir[0]);
     }
-    if (e2 < distY)
+    if (e2 < _points[0].delta[1])
     {
-        _points[0].err += distX;
+        _points[0].err += _points[0].delta[0];
         stepY(_points[0].dir[1]);
     }
     nextWait();
@@ -516,14 +512,14 @@ bool motionStep()
 void stepX(bool dir)
 {
     _sys.currentPosition[0] += dir ? 1 : -1;
-    _points[0].delta[0]--;
+    _points[0].restCount[0]--;
     _points[0].totalCount--;
     steppers[0].step(dir);
 }
 void stepY(bool dir)
 {
     _sys.currentPosition[1] += dir ? 1 : -1;
-    _points[0].delta[1]--;
+    _points[0].restCount[1]--;
     _points[0].totalCount--;
     steppers[1].step(dir);
 }
@@ -573,12 +569,9 @@ void nextWait()
         break;
     }
     }
-    tt = 0;
-    // _sys.during = 160000 / (_sys.currentSpeed + 1);
     _sys.currentSpeed = _sys.currentSpeed > 5000 ? 5000 : (_sys.currentSpeed < 5 ? 5 : _sys.currentSpeed);
     long during = min(62500, ((2000000 / _sys.currentSpeed))) - 1;
     OCR1A = during;
-    // _sys.during = _sys.during > 100000 ? 100000 : (_sys.during < 1500 ? 1500 : _sys.during);
 }
 /**
  * Motion Parse
@@ -650,3 +643,30 @@ double getCommand(char cmdId)
     }
     return _sys.buffer.substring(startIndex, index).toDouble();
 }
+
+double tttt = 0;
+long kkk = 0;
+///*test speed
+void testSpeed(char c)
+{
+    if (tttt == 0)
+    {
+        tttt = micros() / 1000.0;
+    }
+    if (c > 9)
+    {
+        ttt++;
+    }
+    if (ttt >= 1024)
+    {
+        kkk++;
+        float n = (micros() / 1000.0 - tttt) / 1000.0;
+        Serial.print(ttt / n / 1024.0);
+        Serial.print(":");
+        Serial.print(kkk);
+        Serial.print("\n");
+        ttt = 0;
+        tttt = micros() / 1000.0;
+    }
+}
+//*/
