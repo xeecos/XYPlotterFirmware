@@ -1,11 +1,12 @@
 #include <Arduino.h>
 #include <MeStepper.h>
 #include <28BYJ.h>
-#define POINTS_COUNT 6
-#define PULSES_PER_MM 166.66
+#define POINTS_COUNT 10
+#define PULSES_PER_MM 80 //166.66
 #define CURVE_SECTION 0.5
 #define NUM_STEPS 10
 #define NUM_AXIS 2
+#define MAKEBLOCK 1
 // #define DEBUG true
 enum MOTION_STATE
 {
@@ -23,9 +24,9 @@ typedef struct
     volatile long targetPosition[NUM_AXIS];
     volatile long targetCount[NUM_AXIS];
     volatile long totalCount = 0;
-    volatile uint16_t speed = 10000;
-    volatile uint16_t exitSpeed = 10000;
-    volatile uint16_t acceleration = 100;
+    volatile uint16_t speed = 10;
+    volatile uint16_t exitSpeed = 10;
+    volatile uint16_t acceleration = 10;
     volatile uint8_t power = 0;
 } PlannerPoint;
 typedef struct
@@ -37,20 +38,26 @@ typedef struct
     volatile long defaultAcceleration = 64;
     volatile long defaultAccelCount = 200;
     volatile long defaultDecelCount = 200;
-    volatile uint16_t defaultSpeed = 10000;
-    volatile long currentSpeed = 10000;
+    volatile uint16_t defaultSpeed = 10;
+    volatile long currentSpeed = 10;
     volatile uint8_t power = 0;
-    volatile uint16_t speed = 10000;
-    volatile uint16_t acceleration = 1000;
+    volatile uint16_t speed = 10;
+    volatile uint16_t acceleration = 10;
     volatile uint8_t plannedLength = 0;
     volatile uint8_t plannedIndex = 0;
     volatile uint8_t isRunningState = MOTION_ACCELETING;
     volatile bool isRelative = false;
     uint8_t powerPin = 6;
     String buffer = "";
+    String spiCallback = "";
+    volatile int spiCallbackIndex = 0;
+    volatile char spiBuffer[64];
+    volatile int spiBufferIndex = 0;
     volatile int bufferIndex = 0;
     volatile long during = 1000;
     volatile long currentTime = 0;
+    volatile bool isSpiReceiving = false;
+    volatile bool isSpiProcessing = false;
 } SystemStatus;
 static SystemStatus _sys;
 static PlannerPoint _points[POINTS_COUNT];
@@ -58,16 +65,30 @@ static PlannerPoint _prevPoint;
 volatile bool busy = false;
 volatile bool isbusy = false;
 #ifdef MAKEBLOCK
-MeStepper steppers[NUM_AXIS] = {MeStepper(SLOT_1), MeStepper(SLOT_2)};
-#endif
+MeStepper steppers[NUM_AXIS] = {MeStepper(1), MeStepper(2)};
+#else
 SP28BYJ steppers[NUM_AXIS] = {SP28BYJ(2, 3, 7, 8), SP28BYJ(9, 10, 11, 12)};
-
+#endif
+int t = 0;
+long ttt = 0;
+long timeout = 0;
 void setup()
 {
-    Serial.begin(38400);
+    Serial.begin(115200);
     delay(1000);
+    pinMode(MISO, OUTPUT);
+    // turn on SPI in slave mode
+    SPCR |= _BV(SPE);
+    // turn on interrupts
+    SPCR |= _BV(SPIE);
     initTimer();
 #ifdef MAKEBLOCK
+    pinMode(47, OUTPUT);
+    pinMode(48, OUTPUT);
+    pinMode(6, OUTPUT);
+    digitalWrite(48, LOW);
+    delayMicroseconds(250);
+    digitalWrite(47, HIGH);
     for (int i = 0; i < NUM_AXIS; i++)
     {
         steppers[i].setMicroStep(16);
@@ -80,25 +101,111 @@ void setup()
     for (;;)
     {
         // motion();
-        if (Serial.available())
+        if (_sys.isSpiProcessing)
         {
-            char c = Serial.read();
-            if (c == '\n')
+            _sys.isSpiReceiving = false;
+            if (_sys.spiBufferIndex > 1)
             {
+                _sys.spiBuffer[_sys.spiBufferIndex] = 0;
+                _sys.buffer = "";
+                for (int i = 0; i < _sys.spiBufferIndex; i++)
+                {
+                    _sys.buffer += _sys.spiBuffer[i];
+                }
+                _sys.spiBufferIndex = 0;
+                Serial.println(_sys.buffer);
                 parseCommand();
                 _sys.buffer = "";
             }
-            else
+            _sys.isSpiProcessing = false;
+            _sys.isSpiReceiving = true;
+            SPDR = 0x0;
+            while (!(SPSR & (1 << SPIF)))
+                ;
+            SPDR = 0xff;
+            while (!(SPSR & (1 << SPIF)))
+                ;
+            SPDR = 0xff;
+            while (!(SPSR & (1 << SPIF)))
+                ;
+            _sys.isSpiReceiving = false;
+            timeout = 0;
+        }
+        else
+        {
+            timeout++;
+            delayMicroseconds(1);
+            if (timeout > 10000)
             {
-                _sys.buffer += c;
+                _sys.isSpiProcessing = true;
+                Serial.println("timeout!");
+                timeout = 0;
+                SPDR = 0x0;
+                while (!(SPSR & (1 << SPIF)))
+                    ;
+                SPDR = 0xff;
+                while (!(SPSR & (1 << SPIF)))
+                    ;
             }
         }
     }
 }
-
+// double tttt = 0;
+// long kkk = 0;
+ISR(SPI_STC_vect)
+{
+    char c = SPDR;
+    /*test speed
+    if (tttt == 0)
+    {
+        tttt = micros() / 1000.0;
+    }
+    if (c > 9)
+    {
+        ttt++;
+    }
+    if (ttt >= 1024)
+    {
+        kkk++;
+        float n = (micros() / 1000.0 - tttt) / 1000.0;
+        Serial.print(ttt / n / 1024.0);
+        Serial.print(":");
+        Serial.print(kkk);
+        Serial.print("\n");
+        ttt = 0;
+        tttt = micros() / 1000.0;
+    }*/
+    if (c > 0 && c < 0xff)
+    {
+        if (!_sys.isSpiProcessing)
+        {
+            _sys.isSpiReceiving = true;
+        }
+        if (_sys.spiBufferIndex < 64)
+        {
+            if (c == '\n')
+            {
+                _sys.isSpiProcessing = true;
+            }
+            else
+            {
+                _sys.spiBuffer[_sys.spiBufferIndex] = c;
+                _sys.spiBufferIndex++;
+            }
+        }
+        else
+        {
+            _sys.spiBufferIndex = 0;
+        }
+    }
+    else
+    {
+    }
+}
 void loop()
 {
 }
+
 void parseCommand()
 {
     _sys.buffer.toLowerCase();
@@ -130,8 +237,8 @@ void parseCommand()
                 {
                     setAccel(getCommand('a'));
                 }
-                double x = hasCommand('x') ? getCommand('x') * PULSES_PER_MM : (_sys.isRelative ? 0 : _sys.targetPosition[0]);
-                double y = hasCommand('y') ? getCommand('y') * PULSES_PER_MM : (_sys.isRelative ? 0 : _sys.targetPosition[1]);
+                double x = hasCommand('x') ? fmax(-10, fmin(60, getCommand('x'))) * PULSES_PER_MM : (_sys.isRelative ? 0 : _sys.targetPosition[0]);
+                double y = hasCommand('y') ? fmax(-10, fmin(60, getCommand('y'))) * PULSES_PER_MM : (_sys.isRelative ? 0 : _sys.targetPosition[1]);
                 if (_sys.isRelative)
                 {
                     x += _sys.targetPosition[0];
@@ -244,12 +351,10 @@ void addMotion(long x, long y, uint8_t power, uint16_t speed, uint16_t accelerat
 }
 void finishCommand()
 {
-    Serial.print("ok:");
     if (commandsLength() < 1)
     {
-        closePower();
+        // closePower();
     }
-    Serial.println(commandsLength());
 }
 int8_t commandsLength()
 {
@@ -343,6 +448,10 @@ void initTimer()
     OCR1A = 1999; // = (16*10^6) / (1000*8) - 1
     //had to use 16 bit timer1 for this bc 1999>255, but could switch to timers 0 or 2 with larger prescaler
     // turn on CTC mode
+    // TCCR1B |= (1 << WGM12);
+    // Set CS11 bit for 8 prescaler
+    // TCCR1B |= (1 << CS11);
+    // TCCR1A = _BV(WGM10);
     TCCR1B |= (1 << WGM12);
     // Set CS11 bit for 8 prescaler
     TCCR1B |= (1 << CS11);
@@ -353,7 +462,10 @@ void initTimer()
 int tt = 0;
 ISR(TIMER1_COMPA_vect)
 {
-    motion();
+    if (_sys.isSpiProcessing)
+    {
+        motion();
+    }
 }
 void motion()
 {
@@ -382,20 +494,20 @@ bool motionStep()
     {
         return false;
     }
-    firePower(_points[0].power);
+    // firePower(_points[0].power);
     long distX = _points[0].delta[0];
     long distY = _points[0].delta[1];
     if (distX <= 0 && distY <= 0)
         return false;
     long e2 = _points[0].err;
-    if (e2 > -_points[0].delta[0])
+    if (e2 > -distX)
     {
-        _points[0].err -= _points[0].delta[1];
+        _points[0].err -= distY;
         stepX(_points[0].dir[0]);
     }
-    if (e2 < _points[0].delta[1])
+    if (e2 < distY)
     {
-        _points[0].err += _points[0].delta[0];
+        _points[0].err += distX;
         stepY(_points[0].dir[1]);
     }
     nextWait();
@@ -463,8 +575,9 @@ void nextWait()
     }
     tt = 0;
     // _sys.during = 160000 / (_sys.currentSpeed + 1);
-    _sys.currentSpeed = _sys.currentSpeed > 500 ? 500 : (_sys.currentSpeed < 50 ? 50 : _sys.currentSpeed);
-    OCR1A = 2000000 / _sys.currentSpeed - 1;
+    _sys.currentSpeed = _sys.currentSpeed > 5000 ? 5000 : (_sys.currentSpeed < 5 ? 5 : _sys.currentSpeed);
+    long during = min(62500, ((2000000 / _sys.currentSpeed))) - 1;
+    OCR1A = during;
     // _sys.during = _sys.during > 100000 ? 100000 : (_sys.during < 1500 ? 1500 : _sys.during);
 }
 /**
