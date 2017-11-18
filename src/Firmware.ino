@@ -3,11 +3,11 @@
 #include <28BYJ.h>
 // #define MAKEBLOCK 1
 // #define DEBUG true
-#define POINTS_COUNT 10
+#define POINTS_COUNT 6
 #ifdef MAKEBLOCK
 #define PULSES_PER_MM 80
 #else
-#define PULSES_PER_MM 166.66
+#define PULSES_PER_MM 100
 #endif
 #define CURVE_SECTION 0.5
 #define NUM_STEPS 10
@@ -102,72 +102,11 @@ void setup()
 #endif
     Serial.println("opened");
     setPower(0);
+    setSpeed(1000);
     moveTo(0, 0);
-    for (;;)
-    {
-        if (Serial.available)
-        {
-            char c = Serial.read();
-            if (c == '\n')
-            {
-                Serial.println(_sys.buffer);
-                parseCommand();
-                _sys.buffer = "";
-            }
-            else
-            {
-                _sys.buffer += c;
-            }
-        }
-        if (_sys.isSpiProcessing)
-        {
-            _sys.isSpiReceiving = false;
-            if (_sys.spiBufferIndex > 1)
-            {
-                _sys.spiBuffer[_sys.spiBufferIndex] = 0;
-                _sys.buffer = "";
-                for (int i = 0; i < _sys.spiBufferIndex; i++)
-                {
-                    _sys.buffer += _sys.spiBuffer[i];
-                }
-                _sys.spiBufferIndex = 0;
-                Serial.println(_sys.buffer);
-                parseCommand();
-                _sys.buffer = "";
-            }
-            _sys.isSpiProcessing = false;
-            _sys.isSpiReceiving = true;
-            SPDR = 0x0;
-            while (!(SPSR & (1 << SPIF)))
-                ;
-            SPDR = 0xff;
-            while (!(SPSR & (1 << SPIF)))
-                ;
-            SPDR = 0xff;
-            while (!(SPSR & (1 << SPIF)))
-                ;
-            _sys.isSpiReceiving = false;
-            timeout = 0;
-        }
-        else
-        {
-            timeout++;
-            delayMicroseconds(1);
-            if (timeout > 10000)
-            {
-                _sys.isSpiProcessing = true;
-                Serial.println("timeout!");
-                timeout = 0;
-                SPDR = 0x0;
-                while (!(SPSR & (1 << SPIF)))
-                    ;
-                SPDR = 0xff;
-                while (!(SPSR & (1 << SPIF)))
-                    ;
-            }
-        }
-    }
 }
+
+#ifdef MAKEBLOCK
 ISR(SPI_STC_vect)
 {
     char c = SPDR;
@@ -198,14 +137,79 @@ ISR(SPI_STC_vect)
     {
     }
 }
+#endif
 void loop()
 {
+    if (Serial.available())
+    {
+        char c = Serial.read();
+        if (c == '\n')
+        {
+            parseCommand();
+            Serial.println("ok");
+            _sys.buffer = "";
+        }
+        else
+        {
+            _sys.buffer += c;
+        }
+    }
+
+#ifdef MAKEBLOCK
+    if (_sys.isSpiProcessing)
+    {
+        _sys.isSpiReceiving = false;
+        if (_sys.spiBufferIndex > 1)
+        {
+            _sys.spiBuffer[_sys.spiBufferIndex] = 0;
+            _sys.buffer = "";
+            for (int i = 0; i < _sys.spiBufferIndex; i++)
+            {
+                _sys.buffer += _sys.spiBuffer[i];
+            }
+            _sys.spiBufferIndex = 0;
+            Serial.println(_sys.buffer);
+            parseCommand();
+            _sys.buffer = "";
+        }
+        _sys.isSpiProcessing = false;
+        _sys.isSpiReceiving = true;
+        SPDR = 0x0;
+        while (!(SPSR & (1 << SPIF)))
+            ;
+        SPDR = 0xff;
+        while (!(SPSR & (1 << SPIF)))
+            ;
+        SPDR = 0xff;
+        while (!(SPSR & (1 << SPIF)))
+            ;
+        _sys.isSpiReceiving = false;
+        timeout = 0;
+    }
+    else
+    {
+        timeout++;
+        delayMicroseconds(1);
+        if (timeout > 10000)
+        {
+            _sys.isSpiProcessing = true;
+            Serial.println("timeout!");
+            timeout = 0;
+            SPDR = 0x0;
+            while (!(SPSR & (1 << SPIF)))
+                ;
+            SPDR = 0xff;
+            while (!(SPSR & (1 << SPIF)))
+                ;
+        }
+    }
+#endif
 }
 
 void parseCommand()
 {
     _sys.buffer.toLowerCase();
-    // Serial.println(_sys.buffer);
+    Serial.println(_sys.buffer);
     int cmdId;
     if (_sys.buffer.length() > 2)
     {
@@ -233,8 +237,8 @@ void parseCommand()
                 {
                     setAccel(getCommand('a'));
                 }
-                double x = hasCommand('x') ? fmax(-10, fmin(60, getCommand('x'))) * PULSES_PER_MM : (_sys.isRelative ? 0 : _sys.targetPosition[0]);
-                double y = hasCommand('y') ? fmax(-10, fmin(60, getCommand('y'))) * PULSES_PER_MM : (_sys.isRelative ? 0 : _sys.targetPosition[1]);
+                double x = hasCommand('x') ? fmax(-60, fmin(60, getCommand('x'))) * PULSES_PER_MM : (_sys.isRelative ? 0 : _sys.targetPosition[0]);
+                double y = hasCommand('y') ? fmax(-60, fmin(60, getCommand('y'))) * PULSES_PER_MM : (_sys.isRelative ? 0 : _sys.targetPosition[1]);
                 if (_sys.isRelative)
                 {
                     x += _sys.targetPosition[0];
@@ -444,12 +448,6 @@ void initTimer()
     TCNT1 = 0;  //initialize counter value to 0
     // set timer count for 1khz increments
     OCR1A = 1999; // = (16*10^6) / (1000*8) - 1
-    //had to use 16 bit timer1 for this bc 1999>255, but could switch to timers 0 or 2 with larger prescaler
-    // turn on CTC mode
-    // TCCR1B |= (1 << WGM12);
-    // Set CS11 bit for 8 prescaler
-    // TCCR1B |= (1 << CS11);
-    // TCCR1A = _BV(WGM10);
     TCCR1B |= (1 << WGM12);
     // Set CS11 bit for 8 prescaler
     TCCR1B |= (1 << CS11);
@@ -460,10 +458,14 @@ void initTimer()
 int tt = 0;
 ISR(TIMER1_COMPA_vect)
 {
+#ifdef MAKEBLOCK
     if (_sys.isSpiProcessing)
     {
         motion();
     }
+#else
+    run();
+#endif
 }
 void motion()
 {
@@ -569,8 +571,13 @@ void nextWait()
         break;
     }
     }
+#ifdef MAKEBLOCK
     _sys.currentSpeed = _sys.currentSpeed > 5000 ? 5000 : (_sys.currentSpeed < 5 ? 5 : _sys.currentSpeed);
     long during = min(62500, ((2000000 / _sys.currentSpeed))) - 1;
+#else
+    _sys.currentSpeed = _sys.currentSpeed > 2000 ? 2000 : (_sys.currentSpeed < 5 ? 5 : _sys.currentSpeed);
+    long during = min(62500, max(6000, ((2000000 / _sys.currentSpeed)))) - 1;
+#endif
     OCR1A = during;
 }
 /**
