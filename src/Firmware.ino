@@ -63,6 +63,7 @@ typedef struct
     volatile long currentTime = 0;
     volatile bool isSpiReceiving = false;
     volatile bool isSpiProcessing = false;
+    volatile bool isReceiving = false;
 } SystemStatus;
 static SystemStatus _sys;
 static PlannerPoint _points[POINTS_COUNT];
@@ -212,8 +213,10 @@ void loop()
     if (Serial.available())
     {
         char c = Serial.read();
+        _sys.isReceiving = true;
         if (c == '\n')
         {
+            _sys.isReceiving = false;
             parseCommand();
             Serial.println("ok");
             _sys.buffer = "";
@@ -543,7 +546,10 @@ ISR(TIMER1_COMPA_vect)
         motion();
     }
 #else
-    run();
+    if (!_sys.isReceiving)
+    {
+        run();
+    }
 #endif
 }
 void motion()
@@ -654,8 +660,8 @@ void nextWait()
     _sys.currentSpeed = _sys.currentSpeed > 20000 ? 20000 : (_sys.currentSpeed < 5 ? 5 : _sys.currentSpeed);
     long during = min(62500, max(100, ((2000000 / _sys.currentSpeed)))) - 1;
 #else
-    _sys.currentSpeed = _sys.currentSpeed > 2000 ? 2000 : (_sys.currentSpeed < 5 ? 5 : _sys.currentSpeed);
-    long during = min(62500, max(6000, ((2000000 / _sys.currentSpeed)))) - 1;
+    _sys.currentSpeed = (_sys.currentSpeed > 5000 ? 5000 : (_sys.currentSpeed < 5 ? 5 : _sys.currentSpeed));
+    long during = min(62500, max(3000, ((625000 / _sys.currentSpeed)))) - 1;
 #endif
     OCR1A = during;
 }
