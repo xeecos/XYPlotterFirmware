@@ -1,7 +1,7 @@
 #include <Arduino.h>
 #include <MeStepper.h>
 #include <28BYJ.h>
-// #define MAKEBLOCK 1
+#define MAKEBLOCK 1
 // #define DEBUG true
 #define POINTS_COUNT 6
 #ifdef MAKEBLOCK
@@ -80,14 +80,10 @@ long timeout = 0;
 void setup()
 {
     Serial.begin(115200);
-    delay(1000);
+    Serial.println("start");
+    delay(3000);
     initTimer();
 #ifdef MAKEBLOCK
-    pinMode(MISO, OUTPUT);
-    // turn on SPI in slave mode
-    SPCR |= _BV(SPE);
-    // turn on interrupts
-    SPCR |= _BV(SPIE);
     pinMode(47, OUTPUT);
     pinMode(48, OUTPUT);
     pinMode(6, OUTPUT);
@@ -100,12 +96,85 @@ void setup()
         steppers[i].disableOutputs();
     }
 #endif
-    Serial.println("opened");
     setPower(0);
     setSpeed(1000);
+    // firePower(80);
     moveTo(0, 0);
-}
 
+    Serial.println("opened");
+    // testRun();
+}
+int bw = 30;
+void fireBlock(int speed, int power)
+{
+    firePower(power);
+    for (int i = 0; i < bw; i++)
+    {
+        for (int j = 0; j < bw; j++)
+        {
+            stepX(i % 2 == 0);
+            delayMicroseconds(800);
+            for (int k = 0; k < speed; k++)
+                delayMicroseconds(80);
+        }
+        for (int kk = 0; kk < 4; kk++)
+        {
+            stepY(1);
+            delayMicroseconds(800);
+            for (int k = 0; k < speed; k++)
+                delayMicroseconds(80);
+        }
+    }
+    firePower(0);
+    for (int i = 0; i < bw * 4; i++)
+    {
+        stepY(0);
+        delay(1);
+    }
+    delay(2000);
+}
+void moveBlock(int x, int y)
+{
+    bool dirX = x > 0;
+    bool dirY = y > 0;
+    x = x * (x > 0 ? 1 : -1);
+    y = y * (y > 0 ? 1 : -1);
+    for (int i = 0; i < bw * x; i++)
+    {
+        stepX(dirX);
+        delay(1);
+    }
+    for (int i = 0; i < bw * y; i++)
+    {
+        stepY(dirY);
+        delay(1);
+    }
+}
+void testRun()
+{
+    int i, j;
+    for (i = 0; i < NUM_AXIS; i++)
+    {
+        steppers[i].setMicroStep(16);
+        steppers[i].enableOutputs();
+    }
+    for (i = 0; i < 32; i++)
+    {
+        for (j = 0; j < 32; j++)
+        {
+            fireBlock(j + 1, i * 2 + 80);
+            moveBlock(2, 0);
+        }
+        moveBlock(-j * 2, 5);
+    }
+    moveBlock(0, -i * 4);
+    firePower(0);
+    for (int i = 0; i < NUM_AXIS; i++)
+    {
+        steppers[i].setMicroStep(16);
+        steppers[i].disableOutputs();
+    }
+}
 #ifdef MAKEBLOCK
 ISR(SPI_STC_vect)
 {
@@ -209,7 +278,7 @@ void loop()
 void parseCommand()
 {
     _sys.buffer.toLowerCase();
-    Serial.println(_sys.buffer);
+    // Serial.println(_sys.buffer);
     int cmdId;
     if (_sys.buffer.length() > 2)
     {
@@ -254,6 +323,14 @@ void parseCommand()
                 }
                 _sys.targetPosition[0] = x;
                 _sys.targetPosition[1] = y;
+            }
+            break;
+            case 4:
+            {
+                if (hasCommand('p'))
+                {
+                    delayTo(getCommand('p'));
+                }
             }
             break;
             case 28:
@@ -321,7 +398,6 @@ void parseCommand()
         finishCommand();
     }
 }
-
 void addMotion(long x, long y, uint8_t power, uint16_t speed, uint16_t acceleration)
 {
     _points[_sys.plannedIndex].targetPosition[0] = x;
@@ -453,6 +529,9 @@ void initTimer()
     TCCR1B |= (1 << CS11);
     // enable timer compare interrupt
     TIMSK1 |= (1 << OCIE1A);
+    pinMode(MISO, OUTPUT);
+    SPCR |= _BV(SPE);
+    SPCR |= _BV(SPIE);
     sei(); //allow interrupts
 }
 int tt = 0;
@@ -572,8 +651,8 @@ void nextWait()
     }
     }
 #ifdef MAKEBLOCK
-    _sys.currentSpeed = _sys.currentSpeed > 5000 ? 5000 : (_sys.currentSpeed < 5 ? 5 : _sys.currentSpeed);
-    long during = min(62500, ((2000000 / _sys.currentSpeed))) - 1;
+    _sys.currentSpeed = _sys.currentSpeed > 20000 ? 20000 : (_sys.currentSpeed < 5 ? 5 : _sys.currentSpeed);
+    long during = min(62500, max(100, ((2000000 / _sys.currentSpeed)))) - 1;
 #else
     _sys.currentSpeed = _sys.currentSpeed > 2000 ? 2000 : (_sys.currentSpeed < 5 ? 5 : _sys.currentSpeed);
     long during = min(62500, max(6000, ((2000000 / _sys.currentSpeed)))) - 1;
@@ -612,7 +691,11 @@ void lineTo(long x, long y)
 #endif
     addMotion(x, y, _sys.power, _sys.speed, _sys.acceleration);
 }
-
+void delayTo(int ms)
+{
+    waitingForFinish();
+    delay(ms);
+}
 bool hasCommand(char cmdId)
 {
     int index = 0;
