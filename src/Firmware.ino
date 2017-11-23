@@ -1,7 +1,7 @@
 #include <Arduino.h>
 #include <MeStepper.h>
 #include <28BYJ.h>
-#define MAKEBLOCK 1
+// #define MAKEBLOCK 1
 // #define DEBUG true
 #define POINTS_COUNT 6
 #ifdef MAKEBLOCK
@@ -97,14 +97,42 @@ void setup()
         steppers[i].disableOutputs();
     }
 #endif
-    setPower(0);
-    setSpeed(1000);
+    // setPower(0);
+    // setSpeed(1000);
     // firePower(80);
-    moveTo(0, 0);
+    // moveTo(0, 0);
 
     Serial.println("opened");
     // testRun();
 }
+
+void initTimer()
+{
+    cli(); //stop interrupts
+    //set timer1 interrupt at 1kHz
+    TCCR1A = 0; // set entire TCCR1A register to 0
+    TCCR1B = 0; // same for TCCR1B
+    TCNT1 = 0;  //initialize counter value to 0
+    // set timer count for 1khz increments
+    OCR1A = 1999; // = (16*10^6) / (1000*8) - 1
+    TCCR1B |= (1 << WGM12);
+    // Set CS11 bit for 8 prescaler
+    TCCR1B |= (1 << CS11);
+    // enable timer compare interrupt
+    TIMSK1 |= (1 << OCIE1A);
+#ifdef MAKEBLOCK
+    pinMode(MISO, OUTPUT);
+    SPCR |= _BV(SPE);
+    SPCR |= _BV(SPIE);
+#endif
+    TCCR0A = _BV(COM2A1) | _BV(COM2B1) | _BV(WGM20);
+    TCCR0B = _BV(CS22);
+    OCR0A = 180;
+    OCR0B = 50;
+    sei(); //allow interrupts
+    Serial.println(TCCR0A);
+}
+#ifdef MAKEBLOCK
 int bw = 30;
 void fireBlock(int speed, int power)
 {
@@ -176,7 +204,6 @@ void testRun()
         steppers[i].disableOutputs();
     }
 }
-#ifdef MAKEBLOCK
 ISR(SPI_STC_vect)
 {
     char c = SPDR;
@@ -517,25 +544,6 @@ void waitingForFinish()
             return;
         }
     }
-}
-void initTimer()
-{
-    cli(); //stop interrupts
-    //set timer1 interrupt at 1kHz
-    TCCR1A = 0; // set entire TCCR1A register to 0
-    TCCR1B = 0; // same for TCCR1B
-    TCNT1 = 0;  //initialize counter value to 0
-    // set timer count for 1khz increments
-    OCR1A = 1999; // = (16*10^6) / (1000*8) - 1
-    TCCR1B |= (1 << WGM12);
-    // Set CS11 bit for 8 prescaler
-    TCCR1B |= (1 << CS11);
-    // enable timer compare interrupt
-    TIMSK1 |= (1 << OCIE1A);
-    pinMode(MISO, OUTPUT);
-    SPCR |= _BV(SPE);
-    SPCR |= _BV(SPIE);
-    sei(); //allow interrupts
 }
 int tt = 0;
 ISR(TIMER1_COMPA_vect)
