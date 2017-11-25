@@ -7,7 +7,7 @@
 #ifdef MAKEBLOCK
 #define PULSES_PER_MM 80
 #else
-#define PULSES_PER_MM 100
+#define PULSES_PER_MM 60
 #endif
 #define CURVE_SECTION 0.5
 #define NUM_STEPS 10
@@ -36,6 +36,7 @@ typedef struct
 } PlannerPoint;
 typedef struct
 {
+    volatile bool prevDir[NUM_AXIS] = {0, 0};
     volatile long currentPosition[NUM_AXIS] = {0, 0};
     volatile long targetPosition[NUM_AXIS];
     volatile long startPosition[NUM_AXIS];
@@ -82,7 +83,7 @@ void setup()
 {
     Serial.begin(115200);
     Serial.println("start");
-    delay(3000);
+    delay(300);
     initTimer();
 #ifdef MAKEBLOCK
     pinMode(47, OUTPUT);
@@ -96,12 +97,16 @@ void setup()
         steppers[i].setMicroStep(16);
         steppers[i].disableOutputs();
     }
+#else
+    steppers[0].setBack(0);
+    steppers[1].setBack(0);
 #endif
-    // setPower(0);
-    // setSpeed(1000);
+    setPower(0);
+    setSpeed(100);
+    setAccel(100);
     // firePower(80);
-    // moveTo(0, 0);
-
+    moveTo(-100, -100);
+    lineTo(0, 0);
     Serial.println("opened");
     // testRun();
 }
@@ -351,8 +356,6 @@ void parseCommand()
                 {
                     lineTo(x, y);
                 }
-                _sys.targetPosition[0] = x;
-                _sys.targetPosition[1] = y;
             }
             break;
             case 4:
@@ -368,6 +371,8 @@ void parseCommand()
                 waitingForFinish();
                 _sys.currentPosition[0] = 0;
                 _sys.currentPosition[1] = 0;
+                _sys.targetPosition[0] = 0;
+                _sys.targetPosition[1] = 0;
             }
             break;
             case 90:
@@ -423,6 +428,31 @@ void parseCommand()
                 }
                 break;
             }
+            case 5:
+            {
+                if (hasCommand('x') && hasCommand('y'))
+                {
+                    long x = getCommand('x');
+                    long y = getCommand('y');
+                    steppers[0].setBack(x);
+                    steppers[1].setBack(y);
+                }
+                break;
+            }
+            case 6:
+            {
+                if (hasCommand('x') && hasCommand('y'))
+                {
+                    long x = getCommand('x') / 2;
+                    long y = getCommand('y') / 2;
+                    for (int i = 0; i < 5; i++)
+                    {
+                        moveTo(-x + _sys.targetPosition[0], -y + _sys.targetPosition[1]);
+                        moveTo(x + _sys.targetPosition[0], y + _sys.targetPosition[1]);
+                    }
+                }
+                break;
+            }
             }
         }
         finishCommand();
@@ -430,6 +460,8 @@ void parseCommand()
 }
 void addMotion(long x, long y, uint8_t power, uint16_t speed, uint16_t acceleration)
 {
+    _sys.targetPosition[0] = x;
+    _sys.targetPosition[1] = y;
     _points[_sys.plannedIndex].targetPosition[0] = x;
     _points[_sys.plannedIndex].targetPosition[1] = y;
     _points[_sys.plannedIndex].dir[0] = _prevPoint.targetPosition[0] < _points[_sys.plannedIndex].targetPosition[0];
@@ -497,6 +529,8 @@ void shiftPlanned()
 {
     if (_sys.plannedLength > 0)
     {
+        _sys.prevDir[0] = _points[0].dir[0];
+        _sys.prevDir[1] = _points[0].dir[1];
         for (int i = 0; i < _sys.plannedLength - 1; i++)
         {
             _points[i] = _points[i + 1];
@@ -516,6 +550,14 @@ void motionFinish()
         shiftPlanned();
         if (_sys.plannedLength > 0)
         {
+            if (_sys.prevDir[0] != _points[0].dir[0])
+            {
+                _sys.currentPosition[0] -= steppers[0].getBack() * (_points[0].dir[0] ? 1 : -1);
+            }
+            if (_sys.prevDir[1] != _points[0].dir[1])
+            {
+                _sys.currentPosition[1] -= steppers[1].getBack() * (_points[0].dir[1] ? 1 : -1);
+            }
             firePower(_points[0].power);
         }
 #ifdef DEBUG
